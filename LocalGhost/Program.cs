@@ -1,17 +1,18 @@
-using LocalGhost.Services;
+using LocalGhost;
 using LocalGhost.Shared.Models;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-// ── Config ─────────────────────────────────────────────────────
+// ── Read LocalGhost config section into AppSettings ────────────
 builder.Services.Configure<AppSettings>(
     builder.Configuration.GetSection("LocalGhost"));
 
-// ── Services ───────────────────────────────────────────────────
-builder.Services.AddSingleton<GitPoller>();   // ← add this
-
-// ── Worker ─────────────────────────────────────────────────────
+// ── Register the background worker ─────────────────────────────
 builder.Services.AddHostedService<Worker>();
+
+// ── Allows running as a Windows Service (Day 7) ─────────────────
+// Uncomment this line when you install on the server:
+// builder.Services.AddWindowsService(o => o.ServiceName = "LocalGhostAgent");
 
 var host = builder.Build();
 host.Run();
