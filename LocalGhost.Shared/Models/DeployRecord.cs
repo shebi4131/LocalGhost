@@ -4,7 +4,7 @@ public class DeployRecord
 {
     public Guid Id { get; set; } = Guid.NewGuid();
 
-    // The GitHub commit that triggered this deploy
+    // The GitHub commit that triggered this deploy (testing)
     public string CommitSha { get; set; } = string.Empty;
 
     // Short 7-char SHA shown in UI  e.g. "a3f91bc"
