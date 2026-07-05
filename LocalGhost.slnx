@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="LocalGhost.Dashboard/LocalGhost.Dashboard.csproj" />
+  <Project Path="LocalGhost.Shared/LocalGhost.Shared.csproj" />
+  <Project Path="LocalGhost/LocalGhost.csproj" />
+</Solution>
