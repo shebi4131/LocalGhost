@@ -1,0 +1,63 @@
+═══════════════════════════════════════
+  👻 LocalGhost — Service Commands
+═══════════════════════════════════════
+
+── STATUS ──────────────────────────────
+sc.exe query "LocalGhostAgent"
+sc.exe query "LocalGhostDashboard"
+
+── START ───────────────────────────────
+sc.exe start "LocalGhostAgent"
+sc.exe start "LocalGhostDashboard"
+
+── STOP ────────────────────────────────
+sc.exe stop "LocalGhostAgent"
+sc.exe stop "LocalGhostDashboard"
+
+── RESTART ─────────────────────────────
+sc.exe stop "LocalGhostAgent"
+sc.exe start "LocalGhostAgent"
+
+sc.exe stop "LocalGhostDashboard"
+sc.exe start "LocalGhostDashboard"
+
+── START BOTH ──────────────────────────
+sc.exe start "LocalGhostAgent"
+sc.exe start "LocalGhostDashboard"
+
+── STOP BOTH ───────────────────────────
+sc.exe stop "LocalGhostAgent"
+sc.exe stop "LocalGhostDashboard"
+
+── CREATE SERVICES (run as Admin) ──────
+sc.exe create "LocalGhostAgent" binpath="C:\LocalGhost\Services\Agent\LocalGhost.exe" start=auto DisplayName="LocalGhost CI/CD Agent"
+
+sc.exe create "LocalGhostDashboard" binpath="C:\LocalGhost\Services\Dashboard\LocalGhost.Dashboard.exe --contentRoot C:\LocalGhost\Services\Dashboard" start=auto DisplayName="LocalGhost Dashboard"
+
+── DELETE SERVICES ─────────────────────
+sc.exe stop "LocalGhostAgent"
+sc.exe delete "LocalGhostAgent"
+
+sc.exe stop "LocalGhostDashboard"
+sc.exe delete "LocalGhostDashboard"
+
+── DELETE BOTH (one block) ─────────────
+sc.exe stop "LocalGhostAgent"
+sc.exe stop "LocalGhostDashboard"
+sc.exe delete "LocalGhostAgent"
+sc.exe delete "LocalGhostDashboard"
+
+── DASHBOARD URL ───────────────────────
+http://localhost:5050
+
+── AFTER CODE CHANGES ──────────────────
+1.  sc.exe stop "LocalGhostAgent"
+2.  sc.exe stop "LocalGhostDashboard"
+3.  dotnet publish Agent    -o C:\LocalGhost\Services\Agent
+4.  dotnet publish Dashboard -o C:\LocalGhost\Services\Dashboard
+5.  Copy appsettings.json to both folders
+6.  Add "Urls":"http://0.0.0.0:5050" to Dashboard appsettings
+7.  sc.exe start "LocalGhostAgent"
+8.  sc.exe start "LocalGhostDashboard"
+
+═══════════════════════════════════════

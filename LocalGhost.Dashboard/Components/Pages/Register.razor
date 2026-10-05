@@ -1,0 +1,40 @@
+@page "/register"
+@layout Layout.AuthLayout
+@attribute [AllowAnonymous]
+
+<PageTitle>Create account · LocalGhost</PageTitle>
+
+<div class="auth-heading">
+    <h1>Create your account</h1>
+    <p>Start managing safer, quieter deployments.</p>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(Error))
+{
+    <div class="auth-alert error" data-global-toast>@Error</div>
+}
+
+<form class="auth-form" method="post" action="/auth/register" onsubmit="return showAuthLoading(this)">
+    <AntiforgeryToken />
+
+    <label for="email">Email address</label>
+    <input id="email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required autofocus />
+
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="new-password" minlength="8" placeholder="8+ characters, upper/lowercase and number" required />
+
+    <label for="confirmPassword">Confirm password</label>
+    <input id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password" minlength="8" placeholder="Repeat your password" required />
+
+    <button class="auth-submit" type="submit">
+        <span class="button-label">Create account</span>
+        <span class="button-loading" hidden><i></i> Creating account...</span>
+    </button>
+</form>
+
+<p class="auth-switch">Already have an account? <a href="/login">Sign in</a></p>
+
+@code {
+    [SupplyParameterFromQuery(Name = "error")]
+    public string? Error { get; set; }
+}

@@ -1,0 +1,83 @@
+@page "/projects"
+@attribute [Authorize]
+@inject AuthenticationStateProvider AuthenticationState
+@inject UserManager<IdentityUser> Users
+@inject ProjectService ProjectsService
+
+<PageTitle>Projects · LocalGhost</PageTitle>
+
+<div class="projects-head">
+    <div><div class="page-title">Projects</div><div class="page-sub">Every deployment pipeline, isolated and under control.</div></div>
+    <a class="create-project" href="/projects/new"><span>＋</span> Add project</a>
+</div>
+
+@if (_projects.Count == 0)
+{
+    <section class="empty-projects">
+        <div class="empty-orbit"><i></i><i></i><span><img src="/localghost-logo-transparent.png" alt="" width="48" height="48" /></span></div>
+        <span class="empty-kicker">YOUR DEPLOYMENT WORKSPACE</span>
+        <h1>Build your first pipeline.</h1>
+        <p>Connect a GitHub repository, configure a Blazor Web App or .NET + React build, then deploy safely to IIS.</p>
+        <a href="/projects/new"><span>＋</span> Create first project</a>
+        <div class="empty-flow"><b><i class="cyan"></i>GitHub source</b><span>→</span><b><i class="amber"></i>Build pipeline</b><span>→</span><b><i class="green"></i>IIS deploy</b></div>
+    </section>
+}
+else
+{
+    <div class="project-summary">
+        <div><span class="dot violet"></span><small>Total projects</small><strong>@_projects.Count</strong></div>
+        <div><span class="dot green"></span><small>Active</small><strong>@_projects.Count(x => x.IsActive)</strong></div>
+        <div><span class="dot blue"></span><small>Deployments</small><strong>@_projects.Sum(x => x.DeploymentCount)</strong></div>
+        <div><span class="dot amber"></span><small>Need attention</small><strong>@_projects.Count(x => x.LastDeploymentStatus == DeployStatus.Failed)</strong></div>
+    </div>
+
+    <div class="projects-grid">
+        @foreach (var project in _projects)
+        {
+            <article class="project-card">
+                <div class="project-card-top">
+                    <div class="project-mark">@Initials(project.Name)</div>
+                    <div class="project-name"><h2>@project.Name</h2><p>@project.Environment</p></div>
+                    <span class="project-state @(project.IsActive ? "active" : "paused")"><i></i>@(project.IsActive ? "Active" : "Paused")</span>
+                </div>
+                <p class="project-description">@(string.IsNullOrWhiteSpace(project.Description) ? "No description provided." : project.Description)</p>
+                <div class="repo-line"><span>⑂</span><div><small>REPOSITORY</small><strong>@project.GitHub.RepoOwner/@project.GitHub.RepoName</strong></div><code>@project.GitHub.Branch</code></div>
+                <div class="project-metrics">
+                    <div><small>LAST DEPLOY</small><strong class="@StatusClass(project.LastDeploymentStatus)">@(project.LastDeploymentStatus?.ToString() ?? "Not deployed")</strong></div>
+                    <div><small>SUCCESS RATE</small><strong>@(project.DeploymentCount == 0 ? "—" : $"{project.SuccessRate}%")</strong></div>
+                    <div><small>LAST COMMIT</small><strong class="sha">@(ShortSha(project.LastSuccessfulCommitSha))</strong></div>
+                </div>
+                <div class="project-card-foot">
+                    <span>@CommitDescription(project)</span>
+                    <a href="/projects/@project.Id">Open project <b>→</b></a>
+                </div>
+            </article>
+        }
+    </div>
+}
+
+@code {
+    private List<ProjectSummary> _projects = [];
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthenticationState.GetAuthenticationStateAsync()).User;
+        var ownerId = Users.GetUserId(user);
+        if (ownerId is not null) _projects = await ProjectsService.GetProjectsAsync(ownerId);
+    }
+    private static string Initials(string name) => string.Join("", name.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(x => char.ToUpperInvariant(x[0])));
+    private static string ShortSha(string? sha) => string.IsNullOrWhiteSpace(sha) ? "—" : sha[..Math.Min(7, sha.Length)];
+    private static string CommitDescription(ProjectSummary project)
+    {
+        if (string.IsNullOrWhiteSpace(project.LastSuccessfulCommitSha)) return "Waiting for first successful deployment";
+        var branch = project.LastSuccessfulBranch ?? project.GitHub.Branch.Split(',')[0];
+        var committed = project.LastSuccessfulCommittedAt;
+        var time = committed ?? project.LastSuccessfulDeploymentAt;
+        var prefix = $"{ShortSha(project.LastSuccessfulCommitSha)} commit on {branch}";
+        return time is null ? prefix : $"{prefix} · {(committed is null ? "deployed" : "committed")} at {time.Value.ToLocalTime():h:mm tt}";
+    }
+    private static string StatusClass(DeployStatus? status) => status switch { DeployStatus.Success => "success", DeployStatus.Failed => "failed", DeployStatus.Running => "running", _ => "" };
+}
+
+<style>
+    .projects-head{display:flex;align-items:flex-start;justify-content:space-between}.create-project,.empty-projects>a{display:inline-flex;align-items:center;gap:7px;padding:10px 15px;border-radius:9px;background:linear-gradient(135deg,#7c3aed,#6542c1);box-shadow:0 8px 24px #6d28d933;color:white;text-decoration:none;font-size:11px;font-weight:700}.create-project span,.empty-projects>a span{font-size:16px;font-weight:400}.project-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:17px}.project-summary>div{position:relative;padding:15px 17px;border:1px solid #22273a;border-radius:11px;background:#171a28}.project-summary .dot{position:absolute;right:14px;top:14px;width:7px;height:7px;border-radius:50%;box-shadow:0 0 8px currentColor}.dot.violet{color:#a78bfa;background:#a78bfa}.dot.green{color:#34d399;background:#34d399}.dot.blue{color:#60a5fa;background:#60a5fa}.dot.amber{color:#fbbf24;background:#fbbf24}.project-summary small,.project-summary strong{display:block}.project-summary small{margin-bottom:7px;color:#596579;font-size:8px;text-transform:uppercase;letter-spacing:.7px}.project-summary strong{color:#e9eef6;font-size:20px}.projects-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.project-card{overflow:hidden;border:1px solid #24293d;border-radius:14px;background:linear-gradient(145deg,#191c2b,#151824);transition:.18s}.project-card:hover{transform:translateY(-2px);border-color:#3b345b;box-shadow:0 15px 35px #0003}.project-card-top{display:flex;align-items:center;gap:11px;padding:18px 19px 12px}.project-mark{width:39px;height:39px;display:grid;place-items:center;border:1px solid #4a3d74;border-radius:11px;background:linear-gradient(145deg,#33295b,#231e3e);color:#c4b5fd;font-size:11px;font-weight:800}.project-name{min-width:0;flex:1}.project-name h2{overflow:hidden;margin:0 0 3px;color:#f1f5f9;font-size:14px;text-overflow:ellipsis;white-space:nowrap}.project-name p{margin:0;color:#596579;font-size:8px;text-transform:uppercase;letter-spacing:.6px}.project-state{display:flex;align-items:center;gap:5px;padding:4px 8px;border:1px solid;border-radius:12px;font-size:8px;font-weight:700}.project-state i{width:5px;height:5px;border-radius:50%;background:currentColor}.project-state.active{border-color:#1f5545;background:#103027;color:#6ee7b7}.project-state.paused{border-color:#424859;background:#262a38;color:#8792a5}.project-description{height:38px;margin:0;padding:0 19px;color:#697588;font-size:9px;line-height:1.55}.repo-line{display:flex;align-items:center;gap:9px;margin:12px 19px;padding:10px 11px;border:1px solid #272c40;border-radius:8px;background:#10131d}.repo-line>span{color:#67e8f9;font-size:15px}.repo-line>div{min-width:0;flex:1}.repo-line small,.repo-line strong{display:block}.repo-line small{margin-bottom:2px;color:#465064;font-size:7px;letter-spacing:.7px}.repo-line strong{overflow:hidden;color:#b8c1d0;font-size:9px;text-overflow:ellipsis;white-space:nowrap}.repo-line code{padding:3px 6px;border-radius:5px;background:#1f2332;color:#8290a4;font-size:8px}.project-metrics{display:grid;grid-template-columns:1.1fr .8fr 1fr;padding:3px 19px 15px}.project-metrics>div{padding-left:12px;border-left:1px solid #292e41}.project-metrics>div:first-child{padding-left:0;border:0}.project-metrics small,.project-metrics strong{display:block}.project-metrics small{margin-bottom:5px;color:#465064;font-size:7px;letter-spacing:.6px}.project-metrics strong{color:#aeb8c8;font-size:9px}.project-metrics strong.success{color:#34d399}.project-metrics strong.failed{color:#f87171}.project-metrics strong.running{color:#60a5fa}.project-metrics strong.sha{font-family:'Courier New',monospace;color:#a5b4fc}.project-card-foot{display:flex;align-items:center;justify-content:space-between;padding:11px 19px;border-top:1px solid #23283a;background:#121520}.project-card-foot>span{color:#485366;font-size:8px}.project-card-foot>a{color:#a78bfa;text-decoration:none;font-size:9px;font-weight:700}.project-card-foot>a b{margin-left:4px}.empty-projects{display:flex;min-height:570px;align-items:center;justify-content:center;flex-direction:column;border:1px solid #292743;border-radius:17px;background:radial-gradient(circle at 50% 15%,#272047 0,#171927 38%,#131620 76%);text-align:center}.empty-orbit{position:relative;width:105px;height:105px;display:grid;place-items:center;margin-bottom:22px;border:1px solid #3a315d;border-radius:50%}.empty-orbit:before{position:absolute;width:75px;height:75px;border:1px dashed #4b3e72;border-radius:50%;content:'';animation:spin 12s linear infinite}.empty-orbit i{position:absolute;width:7px;height:7px;border-radius:50%;background:#a78bfa;box-shadow:0 0 10px #a78bfa}.empty-orbit i:first-child{top:16px;right:19px}.empty-orbit i:nth-child(2){bottom:12px;left:28px;background:#22d3ee}.empty-orbit span{font-size:34px}.empty-kicker{color:#a78bfa;font-size:8px;font-weight:800;letter-spacing:1.6px}.empty-projects h1{margin:11px 0 9px;color:#f8fafc;font-size:27px;letter-spacing:-.7px}.empty-projects>p{max-width:480px;margin:0 0 22px;color:#718096;font-size:11px;line-height:1.65}.empty-flow{display:flex;align-items:center;gap:12px;margin-top:34px;padding:11px 15px;border:1px solid #2c3043;border-radius:10px;background:#10131bbb}.empty-flow b{display:flex;align-items:center;gap:6px;color:#758195;font-size:8px}.empty-flow b i{width:6px;height:6px;border-radius:50%}.empty-flow i.cyan{background:#22d3ee}.empty-flow i.amber{background:#fbbf24}.empty-flow i.green{background:#34d399}.empty-flow>span{color:#444d60}@@keyframes spin{to{transform:rotate(360deg)}}@@media(max-width:850px){.projects-grid{grid-template-columns:1fr}.project-summary{grid-template-columns:1fr 1fr}}@@media(max-width:520px){.project-summary{grid-template-columns:1fr}.empty-flow{display:none}}
+</style>

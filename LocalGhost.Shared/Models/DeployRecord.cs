@@ -3,6 +3,8 @@
 public class DeployRecord
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid ProjectId { get; set; }
+    public string ProjectName { get; set; } = string.Empty;
 
     // The GitHub commit that triggered this deploy (testing)
     public string CommitSha { get; set; } = string.Empty;
@@ -15,6 +17,7 @@ public class DeployRecord
     public string CommitMessage { get; set; } = string.Empty;
     public string CommitAuthor { get; set; } = string.Empty;
     public string Branch { get; set; } = string.Empty;
+    public DateTime? CommittedAt { get; set; }
 
     public DateTime StartedAt { get; set; } = DateTime.UtcNow;
     public DateTime? FinishedAt { get; set; }
@@ -29,6 +32,8 @@ public class DeployRecord
         : "running...";
 
     public DeployStatus Status { get; set; } = DeployStatus.Running;
+    public PipelineStage Stage { get; set; } = PipelineStage.Source;
+    public string StageMessage { get; set; } = "Preparing source";
 
     // Full log captured from build + deploy steps
     public string FullLog { get; set; } = string.Empty;
@@ -42,7 +47,19 @@ public class DeployRecord
 
 public enum DeployStatus
 {
+    Queued,
     Running,
     Success,
-    Failed
+    Failed,
+    Cancelled
+}
+
+public enum PipelineStage
+{
+    Queued,
+    Source,
+    Build,
+    Deploy,
+    Verify,
+    Completed
 }

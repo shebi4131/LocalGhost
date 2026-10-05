@@ -1,0 +1,176 @@
+@page "/profile"
+@attribute [Authorize]
+@inject AuthenticationStateProvider AuthenticationState
+@inject UserManager<IdentityUser> Users
+
+<PageTitle>Profile · LocalGhost</PageTitle>
+
+<div class="profile-heading">
+    <div>
+        <div class="page-title">Your profile</div>
+        <div class="page-sub">Manage your identity and account security.</div>
+    </div>
+    <span class="account-chip"><i></i> Account active</span>
+</div>
+
+@if (Saved)
+{
+    <div class="profile-alert success" data-global-toast><span>✓</span><div><strong>Profile updated</strong><small>Your changes are now active.</small></div></div>
+}
+@if (!string.IsNullOrWhiteSpace(Error))
+{
+    <div class="profile-alert error" data-global-toast><span>!</span><div><strong>Couldn’t save changes</strong><small>@Error</small></div></div>
+}
+
+<form method="post" action="/auth/profile" onsubmit="return showAuthLoading(this)">
+    <AntiforgeryToken />
+
+    <section class="profile-hero">
+        <div class="avatar-wrap">
+            <div class="profile-avatar">@Initials</div>
+            <span class="online-dot"></span>
+        </div>
+        <div class="profile-summary">
+            <h1>@DisplayName</h1>
+            <p>@Email</p>
+            <div class="profile-tags"><span>Authenticated</span><span>Local account</span></div>
+        </div>
+        <div class="profile-meta">
+            <small>SIGN-IN TYPE</small>
+            <strong>Local account</strong>
+        </div>
+    </section>
+
+    <div class="profile-grid">
+        <section class="profile-card">
+            <div class="card-head">
+                <span class="card-icon">◎</span>
+                <div><h2>Personal information</h2><p>Used to identify you throughout LocalGhost.</p></div>
+            </div>
+            <div class="field-grid">
+                <div class="profile-field full">
+                    <label for="displayName">Display name</label>
+                    <input id="displayName" name="displayName" value="@DisplayName" autocomplete="name" required />
+                    <small>Shown in the sidebar and on your account.</small>
+                </div>
+                <div class="profile-field">
+                    <label for="email">Email address</label>
+                    <input id="email" name="email" value="@Email" type="email" autocomplete="email" required />
+                    <small>Your sign-in email. Changing it also changes your username.</small>
+                </div>
+                <div class="profile-field">
+                    <label for="phone">Phone number <em>Optional</em></label>
+                    <input id="phone" name="phone" value="@Phone" type="tel" autocomplete="tel" placeholder="+92 300 0000000" />
+                    <small>Stored privately with your account.</small>
+                </div>
+            </div>
+        </section>
+
+        <section class="profile-card">
+            <div class="card-head">
+                <span class="card-icon">⌁</span>
+                <div><h2>Change password</h2><p>Leave these fields empty to keep your current password.</p></div>
+            </div>
+            <div class="field-grid">
+                <div class="profile-field full">
+                    <label for="currentPassword">Current password</label>
+                    <input id="currentPassword" name="currentPassword" type="password" autocomplete="current-password" placeholder="Enter current password" />
+                </div>
+                <div class="profile-field">
+                    <label for="newPassword">New password</label>
+                    <input id="newPassword" name="newPassword" type="password" autocomplete="new-password" minlength="8" placeholder="At least 8 characters" />
+                    <small>Use uppercase, lowercase, and a number.</small>
+                </div>
+                <div class="profile-field">
+                    <label for="confirmPassword">Confirm new password</label>
+                    <input id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password" minlength="8" placeholder="Repeat new password" />
+                    <small>Must match your new password.</small>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <div class="profile-actions">
+        <span>Changes apply immediately to this account.</span>
+        <button type="submit">
+            <span class="button-label">Save profile</span>
+            <span class="button-loading" hidden><i></i> Saving...</span>
+        </button>
+    </div>
+</form>
+
+@code {
+    private string DisplayName { get; set; } = "User";
+    private string Email { get; set; } = string.Empty;
+    private string Phone { get; set; } = string.Empty;
+    private string Initials => string.Join("", DisplayName.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(x => char.ToUpperInvariant(x[0])));
+    [SupplyParameterFromQuery(Name = "saved")]
+    public bool Saved { get; set; }
+
+    [SupplyParameterFromQuery(Name = "error")]
+    public string? Error { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var principal = (await AuthenticationState.GetAuthenticationStateAsync()).User;
+        var user = await Users.GetUserAsync(principal);
+        if (user is null) return;
+
+        Email = user.Email ?? string.Empty;
+        Phone = user.PhoneNumber ?? string.Empty;
+        DisplayName = (await Users.GetClaimsAsync(user)).FirstOrDefault(c => c.Type == "display_name")?.Value
+            ?? user.Email?.Split('@')[0]
+            ?? "User";
+    }
+}
+
+<style>
+    .profile-heading { display: flex; align-items: flex-start; justify-content: space-between; }
+    .account-chip { display: inline-flex; align-items: center; gap: 7px; padding: 7px 11px; border: 1px solid #1F3F38; border-radius: 20px; background: #0D2B24; color: #6EE7B7; font-size: 11px; font-weight: 600; }
+    .account-chip i { width: 6px; height: 6px; border-radius: 50%; background: #34D399; box-shadow: 0 0 7px #34D399; }
+    .profile-alert { display: flex; align-items: center; gap: 11px; margin-bottom: 18px; padding: 12px 14px; border: 1px solid; border-radius: 10px; }
+    .profile-alert > span { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 7px; font-weight: 800; }
+    .profile-alert strong, .profile-alert small { display: block; }
+    .profile-alert strong { margin-bottom: 2px; font-size: 12px; }
+    .profile-alert small { font-size: 11px; opacity: .78; }
+    .profile-alert.success { border-color: #164E3F; background: #0B2721; color: #6EE7B7; }
+    .profile-alert.success > span { background: #064E3B; }
+    .profile-alert.error { border-color: #672429; background: #2A1418; color: #FCA5A5; }
+    .profile-alert.error > span { background: #571C23; }
+    .profile-hero { position: relative; display: flex; align-items: center; gap: 18px; overflow: hidden; margin-bottom: 18px; padding: 24px 26px; border: 1px solid #302A50; border-radius: 14px; background: linear-gradient(120deg, #1A1D2E, #201A3B); }
+    .profile-hero::after { position: absolute; right: -50px; top: -100px; width: 300px; height: 220px; border-radius: 50%; background: #7C3AED1a; filter: blur(10px); content: ''; }
+    .avatar-wrap { position: relative; z-index: 1; }
+    .profile-avatar { width: 68px; height: 68px; display: grid; place-items: center; border: 1px solid #6654A4; border-radius: 18px; background: linear-gradient(145deg, #433875, #272243); box-shadow: inset 0 1px #ffffff18, 0 10px 28px #0004; color: #DDD6FE; font-size: 22px; font-weight: 700; }
+    .online-dot { position: absolute; right: -2px; bottom: 2px; width: 13px; height: 13px; border: 3px solid #1B1C30; border-radius: 50%; background: #34D399; }
+    .profile-summary { position: relative; z-index: 1; }
+    .profile-summary h1 { margin: 0 0 4px; color: #F8FAFC; font-size: 20px; }
+    .profile-summary p { margin: 0 0 10px; color: #78869A; font-size: 12px; }
+    .profile-tags { display: flex; gap: 6px; }
+    .profile-tags span { padding: 3px 8px; border: 1px solid #36324E; border-radius: 12px; color: #9B95B7; background: #151624; font-size: 9px; text-transform: uppercase; letter-spacing: .5px; }
+    .profile-meta { position: relative; z-index: 1; margin-left: auto; padding-right: 6px; text-align: right; }
+    .profile-meta small, .profile-meta strong { display: block; }
+    .profile-meta small { margin-bottom: 4px; color: #585E70; font-size: 9px; letter-spacing: 1px; }
+    .profile-meta strong { color: #A8B2C3; font-size: 12px; }
+    .profile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .profile-card { padding: 22px; border: 1px solid #202438; border-radius: 13px; background: #171A28; }
+    .card-head { display: flex; gap: 11px; margin-bottom: 23px; padding-bottom: 17px; border-bottom: 1px solid #24283A; }
+    .card-icon { width: 34px; height: 34px; display: grid; place-items: center; flex-shrink: 0; border: 1px solid #3A315D; border-radius: 9px; background: #231E3D; color: #B8A5F7; font-size: 17px; }
+    .card-head h2 { margin: 0 0 4px; color: #E8EDF5; font-size: 14px; }
+    .card-head p { margin: 0; color: #5F6B7D; font-size: 10px; line-height: 1.4; }
+    .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 17px 14px; }
+    .profile-field { min-width: 0; }
+    .profile-field.full { grid-column: 1 / -1; }
+    .profile-field label { display: flex; justify-content: space-between; margin-bottom: 7px; color: #A5AFBF; font-size: 11px; font-weight: 600; }
+    .profile-field label em { color: #4C5668; font-size: 9px; font-style: normal; font-weight: 400; text-transform: uppercase; }
+    .profile-field input { width: 100%; padding: 10px 11px; border: 1px solid #2A3044; border-radius: 8px; outline: none; background: #10131D; color: #E2E8F0; font-size: 12px; transition: border-color .15s, box-shadow .15s; }
+    .profile-field input::placeholder { color: #3E485B; }
+    .profile-field input:focus { border-color: #7258C9; box-shadow: 0 0 0 3px #7C3AED18; }
+    .profile-field small { display: block; margin-top: 6px; color: #4F5A6C; font-size: 9px; line-height: 1.4; }
+    .profile-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; padding: 16px 18px; border: 1px solid #202438; border-radius: 11px; background: #151824; }
+    .profile-actions > span { color: #596579; font-size: 10px; }
+    .profile-actions button { min-width: 125px; min-height: 38px; display: grid; place-items: center; border: 0; border-radius: 8px; background: linear-gradient(135deg, #7C3AED, #6842C2); color: white; cursor: pointer; font-size: 11px; font-weight: 650; box-shadow: 0 8px 22px #6D28D933; }
+    .profile-actions button:hover { filter: brightness(1.08); }
+    .profile-actions button:disabled { cursor: wait; opacity: .78; }
+    @@media (max-width: 900px) { .profile-grid { grid-template-columns: 1fr; } }
+    @@media (max-width: 620px) { .profile-meta { display: none; } .field-grid { grid-template-columns: 1fr; } .profile-field { grid-column: 1 / -1; } .profile-actions { align-items: stretch; flex-direction: column; gap: 12px; } }
+</style>

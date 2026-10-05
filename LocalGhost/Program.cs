@@ -1,16 +1,14 @@
+using LocalGhost.Agent.Services;
 using LocalGhost.Services;
-using LocalGhost.Shared.Models;
-
+using Microsoft.Extensions.Hosting.WindowsServices;
 var builder = Host.CreateApplicationBuilder(args);
 
-// ── Config ─────────────────────────────────────────────────────
-builder.Services.Configure<AppSettings>(
-    builder.Configuration.GetSection("LocalGhost"));
+builder.Services.AddWindowsService(o => o.ServiceName = "LocalGhost Agent"); // ← uncomment this
 
-// ── Services ───────────────────────────────────────────────────
-builder.Services.AddSingleton<GitPoller>();   // ← add this
+builder.Services.AddSingleton<BuildRunner>();
+builder.Services.AddSingleton<IISDeployer>();
+builder.Services.AddSingleton<AgentEventSender>();
 
-// ── Worker ─────────────────────────────────────────────────────
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();

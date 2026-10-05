@@ -1,0 +1,235 @@
+﻿@inherits LayoutComponentBase
+
+<div class="shell">
+
+    <!-- ── Sidebar ───────────────────────────────────────── -->
+    <aside class="sidebar">
+
+        <div class="sidebar-brand">
+            <img class="brand-icon" src="/localghost-logo-transparent.png" alt="" width="34" height="34" />
+            <div class="brand-text">
+                <span class="brand-name">LocalGhost</span>
+                <span class="brand-sub">CI/CD Agent</span>
+            </div>
+        </div>
+
+        <nav class="sidebar-nav">
+            <NavLink class="nav-item" href="/dashboard" Match="NavLinkMatch.All">
+                <span class="nav-icon">⚡</span>
+                <span class="nav-label">Dashboard</span>
+            </NavLink>
+
+            <NavLink class="nav-item" href="/projects" Match="NavLinkMatch.Prefix">
+                <span class="nav-icon">◆</span>
+                <span class="nav-label">Projects</span>
+            </NavLink>
+
+            <NavLink class="nav-item" href="/profile">
+                <span class="nav-icon">◉</span>
+                <span class="nav-label">Profile</span>
+            </NavLink>
+        </nav>
+
+        <div class="sidebar-footer">
+            <AuthorizeView>
+                <Authorized Context="auth">
+                    <a class="account-info" href="/profile" title="Open profile">
+                        <span class="account-avatar">@Initial(DisplayName(auth.User))</span>
+                        <span class="account-name">@DisplayName(auth.User)</span>
+                    </a>
+                    <form method="post" action="/auth/logout">
+                        <AntiforgeryToken />
+                        <button class="logout-button" type="submit" title="Sign out">↗</button>
+                    </form>
+                </Authorized>
+            </AuthorizeView>
+        </div>
+
+    </aside>
+
+    <!-- ── Main content ──────────────────────────────────── -->
+    <main class="main-content">
+        <div class="content-inner">
+            @Body
+        </div>
+    </main>
+
+</div>
+
+@code {
+    private static string DisplayName(System.Security.Claims.ClaimsPrincipal user) =>
+        user.FindFirst("display_name")?.Value ?? user.Identity?.Name ?? "User";
+
+    private static string Initial(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "U" : value[..1].ToUpperInvariant();
+}
+
+<style>
+    /* ── Reset ──────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* ── Shell layout ───────────────────────────────────── */
+    .shell {
+        display: flex;
+        height: 100vh;
+        background: #0F1117;
+        color: #E2E8F0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        overflow: hidden;
+    }
+
+    /* ── Sidebar ─────────────────────────────────────────── */
+    .sidebar {
+        width: 220px;
+        flex-shrink: 0;
+        background: #13151F;
+        border-right: 1px solid #1E2235;
+        display: flex;
+        flex-direction: column;
+    }
+
+    /* Brand */
+    .sidebar-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 22px 18px;
+        border-bottom: 1px solid #1E2235;
+    }
+    .brand-icon { width: 34px; height: 34px; object-fit: contain; }
+    .brand-name {
+        display: block;
+        font-size: 15px;
+        font-weight: 600;
+        color: #F1F5F9;
+        letter-spacing: -0.2px;
+    }
+    .brand-sub {
+        display: block;
+        font-size: 10px;
+        color: #475569;
+        letter-spacing: 0.3px;
+        margin-top: 1px;
+    }
+
+    /* Nav */
+    .sidebar-nav {
+        flex: 1;
+        padding: 12px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+    .nav-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 12px;
+        border-radius: 8px;
+        color: #94A3B8;
+        text-decoration: none;
+        font-size: 13.5px;
+        font-weight: 500;
+        transition: background 0.12s, color 0.12s;
+    }
+    .nav-item:hover {
+        background: #1A1D2E;
+        color: #E2E8F0;
+    }
+    .nav-item.active {
+        background: #1E1B4B;
+        color: #A5B4FC;
+        border-left: 3px solid #7C3AED;
+        padding-left: 9px;
+    }
+    .nav-icon { font-size: 16px; width: 20px; text-align: center; }
+    .nav-label { flex: 1; }
+
+    /* Footer */
+    .sidebar-footer {
+        padding: 14px 18px;
+        border-top: 1px solid #1E2235;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    .account-info { min-width: 0; display: flex; align-items: center; gap: 8px; color: inherit; text-decoration: none; }
+    .account-avatar {
+        width: 27px; height: 27px; border-radius: 8px; display: grid; place-items: center;
+        flex-shrink: 0; color: #C4B5FD; background: #2E2663; font-size: 11px; font-weight: 700;
+    }
+    .account-name { max-width: 125px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #94A3B8; }
+    .logout-button {
+        border: 0; border-radius: 7px; padding: 6px 8px; color: #64748B; background: transparent;
+        cursor: pointer; font-size: 14px;
+    }
+    .logout-button:hover { color: #F1F5F9; background: #1E2235; }
+    .agent-status {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .status-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #10B981;
+        box-shadow: 0 0 6px #10B981;
+        animation: pulse 2s infinite;
+    }
+    @@keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50%       { opacity: 0.4; }
+    }
+    .status-text { font-size: 11px; color: #64748B; }
+    .agent-version { font-size: 10px; color: #334155; }
+
+    /* ── Main content ────────────────────────────────────── */
+    .main-content {
+        flex: 1;
+        overflow-y: auto;
+        background: #0F1117;
+    }
+    .content-inner {
+        padding: 28px 32px;
+        max-width: 1200px;
+    }
+
+    /* ── Shared card style (used by all pages) ──────────── */
+    .card {
+        background: #1A1D2E;
+        border: 1px solid #1E2235;
+        border-radius: 12px;
+        padding: 20px 24px;
+    }
+    .page-title {
+        font-size: 20px;
+        font-weight: 600;
+        color: #F1F5F9;
+        margin-bottom: 4px;
+    }
+    .page-sub {
+        font-size: 13px;
+        color: #64748B;
+        margin-bottom: 24px;
+    }
+
+    /* ── Status badges ──────────────────────────────────── */
+    .badge {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 3px 10px;
+        border-radius: 20px;
+    }
+    .badge-success { background: #064E3B; color: #34D399; }
+    .badge-failed  { background: #450A0A; color: #F87171; }
+    .badge-running { background: #1E3A5F; color: #60A5FA; }
+
+    /* ── Log lines ──────────────────────────────────────── */
+    .log-line { font-family: 'Courier New', monospace; font-size: 12px; padding: 2px 0; }
+    .log-info    { color: #94A3B8; }
+    .log-success { color: #34D399; }
+    .log-warning { color: #FBBF24; }
+    .log-error   { color: #F87171; }
+</style>

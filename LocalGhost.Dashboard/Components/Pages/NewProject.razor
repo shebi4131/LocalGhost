@@ -1,0 +1,35 @@
+@page "/projects/new"
+@attribute [Authorize]
+@inject GitHubCredentialService GitHubCredentials
+
+<PageTitle>New project · LocalGhost</PageTitle>
+
+<div class="form-page-head">
+    <div><a href="/projects">← Projects</a><h1>Create a project</h1><p>Configure a complete GitHub-to-IIS deployment pipeline.</p></div>
+    <span>New pipeline</span>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(Error))
+{
+    <div class="project-error error" data-global-toast><b>!</b><div><strong>Project couldn’t be created</strong><small>@Error</small></div></div>
+}
+
+<form method="post" action="/projects/create" onsubmit="return showAuthLoading(this)">
+    <AntiforgeryToken />
+    <ProjectFormFields SelectedRepository="_selectedRepository" />
+    <div class="form-actions"><div><strong>Ready to create this pipeline?</strong><small>You can edit every setting later.</small></div><a href="/projects">Cancel</a><button type="submit"><span class="button-label">Create project</span><span class="button-loading" hidden><i></i> Creating...</span></button></div>
+</form>
+
+@code {
+    [SupplyParameterFromQuery(Name = "error")] public string? Error { get; set; }
+    [SupplyParameterFromQuery(Name = "repositoryId")] public long? RepositoryId { get; set; }
+    private GitHubRepositoryOption? _selectedRepository;
+    protected override async Task OnParametersSetAsync()
+    {
+        if (RepositoryId is long repository) _selectedRepository = await GitHubCredentials.GetRepositoryAsync(repository);
+    }
+}
+
+<style>
+    .form-page-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:23px}.form-page-head a{display:inline-block;margin-bottom:10px;color:#7c6ca6;text-decoration:none;font-size:9px}.form-page-head h1{margin:0 0 5px;color:#f1f5f9;font-size:22px}.form-page-head p{margin:0;color:#64748b;font-size:10px}.form-page-head>span{padding:5px 9px;border:1px solid #473a71;border-radius:12px;background:#241e3e;color:#b9a7f4;font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.7px}.project-error{display:flex;gap:10px;margin-bottom:17px;padding:11px 13px;border:1px solid #6f2931;border-radius:9px;background:#2b151a;color:#fca5a5}.project-error>b{width:23px;height:23px;display:grid;place-items:center;border-radius:6px;background:#591e25}.project-error strong,.project-error small{display:block}.project-error strong{font-size:10px}.project-error small{margin-top:2px;font-size:9px}.form-actions{display:flex;align-items:center;gap:12px;margin:17px 0 10px;padding:15px 18px;border:1px solid #252a3d;border-radius:12px;background:#171a28}.form-actions>div{flex:1}.form-actions strong,.form-actions small{display:block}.form-actions strong{margin-bottom:3px;color:#cbd5e1;font-size:10px}.form-actions small{color:#515d70;font-size:8px}.form-actions>a{padding:9px 12px;color:#7b8799;text-decoration:none;font-size:9px}.form-actions>button{min-width:125px;min-height:37px;display:grid;place-items:center;border:0;border-radius:8px;background:linear-gradient(135deg,#7c3aed,#6542c1);box-shadow:0 8px 20px #6d28d930;color:white;cursor:pointer;font-size:10px;font-weight:700}.form-actions>button:disabled{cursor:wait;opacity:.75}
+</style>

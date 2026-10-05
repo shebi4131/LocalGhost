@@ -3,6 +3,7 @@
 public class LogEntry
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid ProjectId { get; set; }
 
     // Which deploy this log line belongs to
     public Guid DeployId { get; set; }
@@ -13,7 +14,7 @@ public class LogEntry
 
     public LogLevel Level { get; set; } = LogLevel.Info;
 
-    // Which step produced this line: "GitPoller" | "BuildRunner" | "IISDeployer" | "Notifier"
+    // Which stage produced this line: "Dashboard" | "BuildRunner" | "IISDeployer" | "Agent"
     public string Source { get; set; } = string.Empty;
 
     // Short timestamp shown in the Blazor log feed  e.g. "14:32:05"

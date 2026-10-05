@@ -1,0 +1,293 @@
+@page "/projects/{ProjectId:guid}"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@implements IDisposable
+@inject AuthenticationStateProvider AuthenticationState
+@inject UserManager<IdentityUser> Users
+@inject ProjectService ProjectsService
+@inject DeployStateService DeployState
+@inject ProjectPreflightService Preflight
+@inject IJSRuntime JS
+
+<PageTitle>@(_project?.Name ?? "Project") · LocalGhost</PageTitle>
+
+@if (_project is null)
+{
+    <div class="missing-project"><span>?</span><h1>Project not found</h1><p>It may have been archived or belong to another account.</p><a href="/projects">Back to projects</a></div>
+}
+else
+{
+    <div class="project-detail-head">
+        <div class="detail-identity"><a href="/projects">← Projects</a><div><span class="detail-mark">@Initials(_project.Name)</span><div><h1>@_project.Name</h1><p>@_project.GitHub.RepoOwner/@_project.GitHub.RepoName · @_project.GitHub.Branch</p></div></div></div>
+        <div class="detail-actions">
+            <details class="project-actions-menu">
+                <summary aria-label="Project actions" title="Project actions"><span></span><span></span><span></span></summary>
+                <div class="project-actions-popover">
+                    <div class="actions-menu-head"><strong>Project actions</strong><small>Manage and run this pipeline</small></div>
+                    <form method="post" action="/projects/@ProjectId/deploy"><AntiforgeryToken /><button class="menu-action primary" type="submit" disabled="@(!_project.IsActive || _current is not null)"><i>▶</i><span><b>@(_current is null ? "Deploy now" : "Deploying...")</b><small>Run the latest configured branch</small></span></button></form>
+                    <button class="menu-action preflight-action" type="button" @onclick="RunPreflightAsync" disabled="@_preflightRunning"><i>@(_preflightRunning ? "…" : "◇")</i><span><b>@(_preflightRunning ? "Checking configuration..." : "Run preflight checks")</b><small>Validate source, build, IIS and permissions</small></span></button>
+                    <a class="menu-action" href="/projects/@ProjectId/settings"><i>⚙</i><span><b>Project settings</b><small>Repository, build and IIS configuration</small></span><em>›</em></a>
+                    <form method="post" action="/projects/@ProjectId/state"><AntiforgeryToken /><input type="hidden" name="active" value="@(!_project.IsActive ? "true" : "false")" /><button class="menu-action @(_project.IsActive ? "warning" : "success-action")" type="submit"><i>@(_project.IsActive ? "Ⅱ" : "▶")</i><span><b>@(_project.IsActive ? "Pause monitoring" : "Activate monitoring")</b><small>@(_project.IsActive ? "Stop checking branches for commits" : "Resume automatic commit detection")</small></span></button></form>
+                </div>
+            </details>
+        </div>
+    </div>
+
+    @if (Created || Queued)
+    {
+        <div class="detail-alert" data-global-toast><span>✓</span><div><strong>@(Created ? "Project created" : "Deployment queued")</strong><small>@(Created ? "The pipeline is ready. Activate it to begin monitoring." : "The agent will pick up this project on its next cycle.")</small></div></div>
+    }
+    @if (!string.IsNullOrWhiteSpace(Error))
+    {
+        <div class="detail-alert error" data-global-toast><span>!</span><div><strong>Action unavailable</strong><small>@Error</small></div></div>
+    }
+
+    @if (_showPreflight && _preflight is not null)
+    {
+        <section class="preflight-panel @(_preflight.CanDeploy ? "passed" : "blocked")">
+            <header><div><span>@(_preflight.CanDeploy ? "✓" : "!")</span><div><h2>@(_preflight.CanDeploy ? "Ready to deploy" : "Preflight needs attention")</h2><p>Checked @_preflight.CheckedAt.ToLocalTime().ToString("dd MMM, HH:mm") · @_preflight.PassedCount passed · @_preflight.WarningCount warning@(_preflight.WarningCount == 1 ? "" : "s") · @_preflight.FailedCount failed</p></div></div><div class="preflight-tools"><button type="button" @onclick="RunPreflightAsync" disabled="@_preflightRunning">@(_preflightRunning ? "Checking..." : "Run again")</button><button class="preflight-close" type="button" aria-label="Close preflight results" title="Close" @onclick="DismissPreflight">×</button></div></header>
+            <div class="preflight-checks">
+                @foreach (var check in _preflight.Checks)
+                {
+                    <div class="preflight-check @check.Status.ToString().ToLowerInvariant()"><i>@CheckIcon(check.Status)</i><div><strong>@check.Name</strong><small>@check.Detail</small></div></div>
+                }
+            </div>
+        </section>
+    }
+
+    <div class="project-status-grid">
+        <div class="status-card primary"><small>PROJECT STATUS</small><strong class="@ProjectStatusClass"><i></i>@ProjectStatusText</strong><p>@ProjectStatusHelp</p></div>
+        <div class="status-card"><small>LAST DEPLOYMENT</small><strong class="@StatusClass(_history.FirstOrDefault()?.Status)">@(_history.FirstOrDefault()?.Status.ToString() ?? "No deployments")</strong><p>@(_history.FirstOrDefault()?.StartedAt.ToLocalTime().ToString("dd MMM yyyy, HH:mm") ?? "Waiting for the first run")</p></div>
+        <div class="status-card"><small>SUCCESS RATE</small><strong>@SuccessRate%</strong><p>@_history.Count deployment@(_history.Count == 1 ? "" : "s") recorded</p></div>
+        <div class="status-card"><small>LAST COMMIT</small><strong class="sha">@ShortSha(_project.LastSuccessfulCommitSha)</strong><p>@(_project.LastSuccessfulCommitSha is null ? "Nothing deployed yet" : "Successfully deployed")</p></div>
+    </div>
+
+    <section class="current-pipeline">
+        <header><div><span class="pulse @(_current is null ? (DeployState.AgentOnline ? "idle" : "offline") : "")"></span><div><h2>@PipelineTitle</h2><p>@PipelineSubtitle</p></div></div><span class="environment">@_project.Environment</span></header>
+        <div class="pipeline-steps">
+            <div class="@StepClass(PipelineStage.Source)"><span>⑂</span><div><small>01 · SOURCE</small><strong>GitHub</strong><p>@_project.GitHub.Branch</p></div></div><i></i>
+            <div class="@StepClass(PipelineStage.Build)"><span>⌘</span><div><small>02 · BUILD</small><strong>@(_project.Kind == ProjectKind.BlazorWebApp ? "Blazor Web App" : string.IsNullOrWhiteSpace(_project.Build.ReactProjectPath) ? ".NET" : ".NET + React")</strong><p>@_project.Build.TimeoutMinutes min timeout</p></div></div><i></i>
+            <div class="@StepClass(PipelineStage.Deploy)"><span>◈</span><div><small>03 · DEPLOY</small><strong>IIS</strong><p>@_project.IIS.AppPoolName</p></div></div><i></i>
+            <div class="@StepClass(PipelineStage.Verify)"><span>✓</span><div><small>04 · VERIFY</small><strong>Health</strong><p>@(string.IsNullOrWhiteSpace(_project.IIS.HealthCheckUrl) ? "App pool" : "HTTP check")</p></div></div>
+        </div>
+    </section>
+
+    <div class="detail-columns">
+        <section class="detail-card live-card">
+            <header><div><h2>@(_selectedRunId is null ? "Live output" : "Run output")</h2><p>@(_selectedRunId is null ? "Latest deployment" : $"{_selectedRun?.ShortSha} · {_selectedRun?.StartedAt.ToLocalTime():dd MMM, HH:mm}") · @VisibleLogs.Count() log lines</p></div><div class="log-tools">@if (_selectedRunId is not null){<button type="button" @onclick="BackToLiveAsync">↩ Live</button>}<button type="button" @onclick="ClearOutput" disabled="@(!VisibleLogs.Any())">Clear output</button><span class="@(_selectedRunId is not null ? "archive-badge" : DeployState.AgentOnline ? "" : "offline-badge")">@(_selectedRunId is not null ? "HISTORY" : DeployState.AgentOnline ? "LIVE" : "AGENT OFFLINE")</span></div></header>
+            <div class="mini-logs" id="liveProjectLogs">
+                @if (!VisibleLogs.Any())
+                {
+                    <div class="empty-log"><span>›_</span><p>@(_outputCleared ? "Output cleared from view. Saved run logs are still available in history." : "No output for this run yet.")</p></div>
+                }
+                @foreach (var line in VisibleLogs)
+                {
+                    <div class="log-line @line.CssClass"><time>@line.TimeDisplay</time><span>@line.Message</span></div>
+                }
+            </div>
+        </section>
+        <section class="detail-card history-card">
+            <header><div><h2>Recent deployments</h2><p>Project-specific history</p></div><span>@_history.Count</span></header>
+            <div class="history-list">
+                @if (_history.Count == 0)
+                {
+                    <div class="empty-history"><span>◷</span><p>No deployments have run for this project.</p></div>
+                }
+                @foreach (var run in PagedHistory)
+                {
+                    <div class="history-item @(_selectedRunId == run.Id ? "selected" : "")"><span class="history-status @StatusClass(run.Status)"></span><button class="history-open" type="button" title="View this run's logs" @onclick="() => SelectRunAsync(run)"><strong>@run.CommitMessage</strong><small>@run.CommitAuthor · @run.Branch · @run.StartedAt.ToLocalTime().ToString("dd MMM, HH:mm")</small></button><code>@run.ShortSha</code><b class="@StatusClass(run.Status)">@run.Status</b><div class="history-actions">@if (run.Status is DeployStatus.Failed or DeployStatus.Cancelled){<form method="post" action="/projects/@ProjectId/deploy"><AntiforgeryToken /><input type="hidden" name="branch" value="@run.Branch" /><button class="retry-run" type="submit" disabled="@(_current is not null)">↻ Retry</button></form>}@if (run.Status is not (DeployStatus.Running or DeployStatus.Queued)){<button class="delete-run" type="button" title="Delete this run" aria-label="Delete run @run.ShortSha" @onclick="() => _pendingDeleteRun = run">×</button>}</div></div>
+                }
+            </div>
+            @if (HistoryPageCount > 1)
+            {
+                <nav class="pager" aria-label="Deployment history pages"><button type="button" @onclick="() => SetHistoryPage(_historyPage - 1)" disabled="@(_historyPage == 1)">‹</button><span>Page @_historyPage of @HistoryPageCount</span><button type="button" @onclick="() => SetHistoryPage(_historyPage + 1)" disabled="@(_historyPage == HistoryPageCount)">›</button></nav>
+            }
+        </section>
+    </div>
+    @if (_pendingDeleteRun is not null)
+    {
+        <div class="delete-overlay" role="presentation" @onclick="() => _pendingDeleteRun = null"><div class="delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-run-title" @onclick:stopPropagation="true"><span>⌫</span><h2 id="delete-run-title">Delete this deployment record?</h2><p>The run and its saved logs will be removed from your history. This cannot be undone.</p><div><button type="button" @onclick="() => _pendingDeleteRun = null">Cancel</button><button class="confirm-delete" type="button" @onclick="DeleteSelectedRunAsync">Delete run</button></div></div></div>
+    }
+}
+
+@code {
+    [Parameter] public Guid ProjectId { get; set; }
+    [SupplyParameterFromQuery(Name = "created")] public bool Created { get; set; }
+    [SupplyParameterFromQuery(Name = "queued")] public bool Queued { get; set; }
+    [SupplyParameterFromQuery(Name = "error")] public string? Error { get; set; }
+    private ProjectSummary? _project;
+    private List<DeployRecord> _history = [];
+    private List<LogEntry> _logs = [];
+    private DeployRecord? _current;
+    private ProjectPreflightReport? _preflight;
+    private bool _preflightRunning;
+    private bool _showPreflight = true;
+    private DeployRecord? _selectedRun;
+    private Guid? _selectedRunId;
+    private DeployRecord? _pendingDeleteRun;
+    private DateTime? _clearAfter;
+    private bool _outputCleared;
+    private IEnumerable<LogEntry> VisibleLogs => _outputCleared && _selectedRunId is not null
+        ? []
+        : _logs.Where(x => _clearAfter is null || x.Timestamp > _clearAfter.Value);
+    private const int HistoryPageSize = 7;
+    private int _historyPage = 1;
+    private string? _ownerId;
+    private readonly CancellationTokenSource _refreshCancellation = new();
+    private int SuccessRate => _history.Count == 0 ? 0 : (int)((double)_history.Count(x => x.Status == DeployStatus.Success) / _history.Count * 100);
+    private string ProjectStatusText => !_project!.IsActive ? "Paused" : !DeployState.AgentOnline ? "Agent offline" : _current is null ? "Monitoring" : _current.Stage.ToString();
+    private string ProjectStatusClass => !_project!.IsActive ? "muted" : !DeployState.AgentOnline ? "failed" : _current is null ? "green" : "running";
+    private string ProjectStatusHelp => !_project!.IsActive
+        ? "Commit monitoring is disabled"
+        : !DeployState.AgentOnline
+            ? "Start or update the LocalGhost Agent service"
+            : _current is null
+                ? $"Agent connected · checks every {_project.PollIntervalSeconds} seconds"
+                : _current.StageMessage;
+    private string PipelineTitle => _current is not null
+        ? $"{_current.Stage} · {_current.ShortSha}"
+        : DeployState.AgentOnline ? "Pipeline ready" : "Waiting for agent";
+    private string PipelineSubtitle => _current?.StageMessage
+        ?? (DeployState.AgentOnline ? "Watching the configured GitHub branches for commits." : "The dashboard is online, but no compatible agent is connected.");
+    private int HistoryPageCount => Math.Max(1, (int)Math.Ceiling(_history.Count / (double)HistoryPageSize));
+    private IEnumerable<DeployRecord> PagedHistory => _history.Skip((_historyPage - 1) * HistoryPageSize).Take(HistoryPageSize);
+    protected override async Task OnInitializedAsync()
+    {
+        _ownerId = Users.GetUserId((await AuthenticationState.GetAuthenticationStateAsync()).User);
+        if (_ownerId is null) return;
+        _project = await ProjectsService.GetProjectAsync(_ownerId, ProjectId);
+        if (_project is null) return;
+        _history = await ProjectsService.GetHistoryAsync(_ownerId, ProjectId);
+        _logs = _history.Count > 0 ? await ProjectsService.GetRunLogsAsync(_ownerId, ProjectId, _history[0].Id) : [];
+        _current = DeployState.GetCurrent(ProjectId);
+        _preflight = Preflight.GetLatest(_ownerId, ProjectId);
+        if (_current is not null) _logs = DeployState.GetCurrentLogs(ProjectId).ToList();
+        DeployState.OnChange += Refresh;
+        _ = RefreshClockAsync(_refreshCancellation.Token);
+    }
+    private void Refresh()
+    {
+        _ = InvokeAsync(RefreshViewAsync);
+    }
+    private async Task RefreshViewAsync()
+    {
+        var wasRunning = _current is not null;
+        _current = DeployState.GetCurrent(ProjectId);
+        if (_selectedRunId is not null)
+        {
+            // Preserve the chosen historical logs while refreshing the run list after a deployment finishes.
+            if (wasRunning && _current is null && _ownerId is not null)
+            {
+                _history = await ProjectsService.GetHistoryAsync(_ownerId, ProjectId);
+                _historyPage = Math.Min(_historyPage, HistoryPageCount);
+                _project = await ProjectsService.GetProjectAsync(_ownerId, ProjectId);
+            }
+        }
+        else if (_current is not null)
+        {
+            _logs = DeployState.GetCurrentLogs(ProjectId).ToList();
+        }
+        else if (_ownerId is not null)
+        {
+            _history = await ProjectsService.GetHistoryAsync(_ownerId, ProjectId);
+            _historyPage = Math.Min(_historyPage, HistoryPageCount);
+            _logs = _history.Count > 0 ? await ProjectsService.GetRunLogsAsync(_ownerId, ProjectId, _history[0].Id) : [];
+            _project = await ProjectsService.GetProjectAsync(_ownerId, ProjectId);
+        }
+        StateHasChanged();
+        await Task.Yield();
+        try { await JS.InvokeVoidAsync("scrollToBottom", "liveProjectLogs"); } catch { }
+    }
+    private async Task RefreshClockAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken)) await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
+    }
+    public void Dispose()
+    {
+        DeployState.OnChange -= Refresh;
+        _refreshCancellation.Cancel();
+        _refreshCancellation.Dispose();
+    }
+    private static string Initials(string name) => string.Join("", name.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(x => char.ToUpperInvariant(x[0])));
+    private static string ShortSha(string? sha) => string.IsNullOrWhiteSpace(sha) ? "—" : sha[..Math.Min(7, sha.Length)];
+    private static string StatusClass(DeployStatus? status) => status switch { DeployStatus.Success => "success", DeployStatus.Failed => "failed", DeployStatus.Running => "running", DeployStatus.Queued => "queued", _ => "muted" };
+    private void SetHistoryPage(int page) => _historyPage = Math.Clamp(page, 1, HistoryPageCount);
+    private void DismissPreflight()
+    {
+        _showPreflight = false;
+        if (_ownerId is not null) Preflight.Dismiss(_ownerId, ProjectId);
+    }
+    private async Task SelectRunAsync(DeployRecord run)
+    {
+        if (_ownerId is null) return;
+        _selectedRunId = run.Id;
+        _selectedRun = run;
+        _logs = await ProjectsService.GetRunLogsAsync(_ownerId, ProjectId, run.Id);
+        _clearAfter = null;
+        _outputCleared = false;
+        try { await JS.InvokeVoidAsync("scrollToBottom", "liveProjectLogs"); } catch { }
+    }
+    private async Task BackToLiveAsync()
+    {
+        _selectedRunId = null;
+        _selectedRun = null;
+        _clearAfter = null;
+        _outputCleared = false;
+        if (_current is not null) _logs = DeployState.GetCurrentLogs(ProjectId).ToList();
+        else if (_ownerId is not null) _logs = _history.Count > 0 ? await ProjectsService.GetRunLogsAsync(_ownerId, ProjectId, _history[0].Id) : [];
+    }
+    private void ClearOutput()
+    {
+        _outputCleared = true;
+        _clearAfter = DateTime.UtcNow;
+    }
+    private async Task DeleteSelectedRunAsync()
+    {
+        if (_ownerId is null || _pendingDeleteRun is null) return;
+        var runId = _pendingDeleteRun.Id;
+        _pendingDeleteRun = null;
+        if (!await ProjectsService.DeleteRunAsync(_ownerId, ProjectId, runId)) return;
+        _history = await ProjectsService.GetHistoryAsync(_ownerId, ProjectId);
+        _historyPage = Math.Min(_historyPage, HistoryPageCount);
+        _project = await ProjectsService.GetProjectAsync(_ownerId, ProjectId);
+        if (_selectedRunId == runId || _selectedRunId is null) await BackToLiveAsync();
+    }
+    private async Task RunPreflightAsync()
+    {
+        if (_ownerId is null || _preflightRunning) return;
+        _preflightRunning = true;
+        try { _preflight = await Preflight.RunAsync(_ownerId, ProjectId, _refreshCancellation.Token); _showPreflight = true; }
+        finally { _preflightRunning = false; }
+    }
+    private static string CheckIcon(PreflightCheckStatus status) => status switch
+    {
+        PreflightCheckStatus.Passed => "✓",
+        PreflightCheckStatus.Warning => "!",
+        _ => "×"
+    };
+    private string StepClass(PipelineStage step)
+    {
+        if (_current is null) return DeployState.AgentOnline ? "ready" : string.Empty;
+        if (_current.Stage == PipelineStage.Completed || (int)_current.Stage > (int)step) return "complete";
+        return _current.Stage == step ? "running" : string.Empty;
+    }
+}
+
+<style>
+    .project-detail-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:20px}.detail-identity>a{display:block;margin-bottom:10px;color:#74669a;text-decoration:none;font-size:9px}.detail-identity>div{display:flex;align-items:center;gap:11px}.detail-mark{width:43px;height:43px;display:grid;place-items:center;border:1px solid #4a3d74;border-radius:12px;background:linear-gradient(145deg,#33295b,#231e3e);color:#c4b5fd;font-size:12px;font-weight:800}.detail-identity h1{margin:0 0 4px;color:#f1f5f9;font-size:20px}.detail-identity p{margin:0;color:#64748b;font-size:9px}.detail-actions{display:flex;align-items:center;gap:8px}.detail-actions>a,.detail-actions button{min-height:34px;padding:0 12px;border:1px solid #30364a;border-radius:8px;background:#191c2a;color:#909bad;text-decoration:none;cursor:pointer;font:9px inherit}.detail-actions .deploy-now{display:flex;align-items:center;gap:7px;border:0;background:linear-gradient(135deg,#7c3aed,#6542c1);color:white;font-weight:700}.detail-actions .deploy-now:disabled{opacity:.45;cursor:not-allowed}.detail-alert{display:flex;gap:9px;margin-bottom:14px;padding:10px 12px;border:1px solid #17513f;border-radius:9px;background:#0d2b24;color:#6ee7b7}.detail-alert.error{border-color:#68262d;background:#2b151a;color:#fca5a5}.detail-alert>span{font-weight:800}.detail-alert strong,.detail-alert small{display:block}.detail-alert strong{font-size:9px}.detail-alert small{margin-top:2px;font-size:8px}.project-status-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-bottom:15px}.status-card{padding:15px 16px;border:1px solid #23283b;border-radius:11px;background:#171a28}.status-card>small,.status-card>strong,.status-card>p{display:block}.status-card>small{margin-bottom:8px;color:#4d586a;font-size:7px;letter-spacing:.7px}.status-card>strong{margin-bottom:5px;color:#d5dce7;font-size:15px}.status-card>strong.green{color:#34d399}.status-card>strong.muted{color:#7b8799}.status-card>strong.failed{color:#f87171}.status-card>strong.success{color:#34d399}.status-card>strong.running{color:#60a5fa}.status-card>strong.sha{font-family:'Courier New',monospace;color:#a5b4fc}.status-card>strong i{display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:currentColor;box-shadow:0 0 7px currentColor}.status-card>p{margin:0;color:#505b6d;font-size:8px}.current-pipeline{margin-bottom:15px;padding:18px 20px;border:1px solid #292743;border-radius:13px;background:radial-gradient(circle at 80% -20%,#302053,#181a29 45%)}.current-pipeline>header{display:flex;align-items:center;justify-content:space-between;margin-bottom:19px}.current-pipeline>header>div{display:flex;align-items:center;gap:9px}.pulse{width:8px;height:8px;border-radius:50%;background:#60a5fa;box-shadow:0 0 9px #60a5fa;animation:pulseGlow 1.5s infinite}.pulse.idle{background:#34d399;box-shadow:0 0 9px #34d399}.current-pipeline h2{margin:0 0 3px;color:#e8edf5;font-size:12px}.current-pipeline header p{margin:0;color:#596579;font-size:8px}.environment{padding:4px 8px;border:1px solid #44376d;border-radius:11px;color:#a997df;font-size:7px;text-transform:uppercase}.pipeline-steps{display:flex;align-items:center}.pipeline-steps>div{min-width:130px;display:flex;align-items:center;gap:9px}.pipeline-steps>div>span{width:31px;height:31px;display:grid;place-items:center;border:1px solid #32374a;border-radius:8px;background:#1b1e2c;color:#647084}.pipeline-steps>div.complete>span{border-color:#17513f;background:#102e27;color:#6ee7b7}.pipeline-steps>div.running>span{border-color:#314d78;background:#17263d;color:#60a5fa}.pipeline-steps small,.pipeline-steps strong,.pipeline-steps p{display:block}.pipeline-steps small{margin-bottom:2px;color:#444e61;font-size:6px}.pipeline-steps strong{color:#aeb8c8;font-size:9px}.pipeline-steps p{margin:2px 0 0;color:#505b6d;font-size:7px}.pipeline-steps>i{height:1px;flex:1;margin:0 12px;background:#34394c}.detail-columns{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(300px,.65fr);gap:15px}.detail-card{overflow:hidden;border:1px solid #23283b;border-radius:12px;background:#171a28}.detail-card>header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #24293b}.detail-card h2{margin:0 0 2px;color:#dce3ed;font-size:11px}.detail-card header p{margin:0;color:#4d586a;font-size:7px}.detail-card>header>span{padding:3px 7px;border:1px solid #214a40;border-radius:9px;background:#102c25;color:#6ee7b7;font-size:7px;font-weight:700}.mini-logs{min-height:300px;max-height:430px;overflow:auto;padding:13px 15px;background:#0e1119}.mini-logs .log-line{display:flex;gap:9px;font-size:8px;line-height:1.65}.mini-logs time{color:#374155}.empty-log,.empty-history{min-height:200px;display:flex;align-items:center;justify-content:center;flex-direction:column;color:#465064;text-align:center}.empty-log>span,.empty-history>span{margin-bottom:9px;color:#62557e;font-size:21px}.empty-log p,.empty-history p{max-width:240px;margin:0;font-size:8px;line-height:1.5}.history-list{padding:5px 14px}.history-item{display:grid;grid-template-columns:7px minmax(0,1fr) auto auto auto;align-items:center;gap:7px;padding:10px 0;border-bottom:1px solid #23283a}.history-item:last-child{border:0}.history-status{width:7px;height:7px;border-radius:50%;background:#657084}.history-status.success{background:#34d399}.history-status.failed{background:#f87171}.history-status.running{background:#60a5fa}.history-item>div{min-width:0}.history-item strong,.history-item small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.history-item strong{margin-bottom:3px;color:#aeb8c8;font-size:8px}.history-item small{color:#4b5669;font-size:7px}.history-item code{color:#8e9ab0;font-size:7px}.history-item>b{font-size:7px}.history-item>b.success{color:#34d399}.history-item>b.failed{color:#f87171}.history-item>b.running{color:#60a5fa}.retry-run{padding:4px 7px;border:1px solid #5c3546;border-radius:6px;background:#2d1922;color:#fda4af;cursor:pointer;font:700 7px inherit}.retry-run:hover{background:#40202c}.retry-run:disabled{opacity:.4}.pager{display:flex;align-items:center;justify-content:center;gap:9px;padding:10px;border-top:1px solid #24293b}.pager button{width:25px;height:24px;border:1px solid #343a50;border-radius:6px;background:#1c2030;color:#aeb8c8;cursor:pointer}.pager button:disabled{cursor:not-allowed;opacity:.3}.pager span{color:#69758a;font-size:7px}.missing-project{min-height:500px;display:grid;place-content:center;text-align:center}.missing-project>span{font-size:30px;color:#7c3aed}.missing-project h1{color:#f1f5f9}.missing-project p{color:#64748b}.missing-project a{color:#a78bfa}@@keyframes pulseGlow{50%{opacity:.45}}@@media(max-width:900px){.project-status-grid{grid-template-columns:1fr 1fr}.detail-columns{grid-template-columns:1fr}.pipeline-steps{display:grid;grid-template-columns:1fr 1fr;gap:12px}.pipeline-steps>i{display:none}}@@media(max-width:650px){.project-detail-head{align-items:flex-start;flex-direction:column;gap:14px}.project-status-grid{grid-template-columns:1fr}.detail-actions{flex-wrap:wrap}}
+    .pulse.offline{background:#f87171;box-shadow:0 0 9px #f87171}.detail-card>header>span.offline-badge{border-color:#653039;background:#2d171b;color:#fca5a5}.pipeline-steps>div.running>span{animation:stagePulse 1.05s ease-in-out infinite}.pipeline-steps>div.ready>span{animation:readyFloat 2.4s ease-in-out infinite}.pipeline-steps>div:nth-of-type(2).ready>span{animation-delay:.18s}.pipeline-steps>div:nth-of-type(3).ready>span{animation-delay:.36s}.pipeline-steps>div:nth-of-type(4).ready>span{animation-delay:.54s}.pipeline-steps>div.complete>span{animation:completePop .38s ease-out}.pipeline-steps>div.complete+ i{background:#245647}.mini-logs .log-line{padding:2px 0;border-bottom:1px solid #171b27}.mini-logs .log-line:last-child{border:0}@@keyframes stagePulse{50%{box-shadow:0 0 16px #60a5fa88;transform:translateY(-2px) scale(1.04)}}@@keyframes readyFloat{50%{border-color:#4d4568;color:#9587b7;transform:translateY(-2px)}}@@keyframes completePop{50%{transform:scale(1.12)}}
+</style>
+<style>
+    .preflight-tools{display:flex;align-items:center;gap:8px}.preflight-tools .preflight-close{width:30px;height:30px;display:grid;place-items:center;padding:0;border:1px solid #3b4558;border-radius:7px;background:#1d2230;color:#b7c2d0;font-size:18px;line-height:1}.preflight-tools .preflight-close:hover{border-color:#87515d;background:#362028;color:#fff}.log-tools{display:flex;align-items:center;gap:7px}.log-tools button{padding:5px 8px;border:1px solid #384159;border-radius:7px;background:#202638;color:#aab8ce;cursor:pointer;font:700 8px inherit}.log-tools button:hover:not(:disabled){border-color:#7c5cc3;color:#e2d8ff}.log-tools button:disabled{opacity:.4;cursor:default}.log-tools>span{padding:3px 7px;border:1px solid #214a40;border-radius:9px;background:#102c25;color:#6ee7b7;font-size:7px;font-weight:700}.log-tools>span.offline-badge{border-color:#653039;background:#2d171b;color:#fca5a5}.log-tools>span.archive-badge{border-color:#4b3f72;background:#261f3f;color:#c4b5fd}.history-item{grid-template-columns:7px minmax(0,1fr) auto auto auto}.history-item.selected{background:#211d35;border-radius:7px}.history-open{min-width:0;padding:0;border:0;background:transparent;text-align:left;cursor:pointer}.history-open:hover strong{color:#d7c8ff}.history-actions{display:flex;align-items:center;gap:5px}.delete-run{width:22px;height:22px;display:grid;place-items:center;border:1px solid #4e3540;border-radius:6px;background:#281c23;color:#ed9aa9;cursor:pointer;font-size:13px}.delete-run:hover{background:#42232e;color:#fff}.delete-overlay{position:fixed;z-index:90;inset:0;display:grid;place-items:center;padding:20px;background:#05060ac9;backdrop-filter:blur(4px)}.delete-dialog{width:min(100%,360px);padding:22px;border:1px solid #5b3744;border-radius:14px;background:#1a1b2b;box-shadow:0 24px 70px #0009}.delete-dialog>span{width:35px;height:35px;display:grid;place-items:center;border-radius:10px;background:#3a222b;color:#fda4af;font-size:18px}.delete-dialog h2{margin:14px 0 8px;color:#f1f5f9;font-size:16px}.delete-dialog p{margin:0;color:#9aa6b8;font-size:10px;line-height:1.6}.delete-dialog>div{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}.delete-dialog button{padding:8px 12px;border:1px solid #3d455a;border-radius:8px;background:#252a3a;color:#c4cfdf;cursor:pointer;font:700 9px inherit}.delete-dialog button.confirm-delete{border-color:#8a3b4b;background:#a13f53;color:#fff}@@media(max-width:650px){.log-tools{flex-wrap:wrap;justify-content:flex-end}.preflight-tools{flex-shrink:0}}
+</style>
+<style>
+    .project-actions-popover .menu-action.preflight-action i{border-color:#28536b;background:#172b39;color:#7dd3fc}.project-actions-popover .menu-action.preflight-action b{color:#bae6fd}.preflight-panel{margin-bottom:15px;overflow:hidden;border:1px solid #28503f;border-radius:13px;background:#151b22}.preflight-panel.blocked{border-color:#65343d}.preflight-panel>header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #28303c;background:linear-gradient(90deg,#15312780,transparent)}.preflight-panel.blocked>header{background:linear-gradient(90deg,#361c2280,transparent)}.preflight-panel>header>div{display:flex;align-items:center;gap:10px}.preflight-panel>header>div>span{width:30px;height:30px;display:grid;place-items:center;border:1px solid #28634d;border-radius:9px;background:#173a2e;color:#6ee7b7;font-weight:800}.preflight-panel.blocked>header>div>span{border-color:#71404a;background:#3b2027;color:#fda4af}.preflight-panel h2{margin:0 0 3px;color:#e3e9f1;font-size:11px}.preflight-panel header p{margin:0;color:#657185;font-size:7px}.preflight-panel header button{padding:7px 10px;border:1px solid #3b4558;border-radius:7px;background:#1d2230;color:#aeb9c8;cursor:pointer;font:700 8px inherit}.preflight-panel header button:hover{border-color:#5c4a91;color:#d2c6f7}.preflight-panel header button:disabled{opacity:.45}.preflight-checks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:#252b38}.preflight-check{min-width:0;display:flex;gap:9px;padding:11px 14px;background:#171a25}.preflight-check>i{width:20px;height:20px;flex:0 0 20px;display:grid;place-items:center;border-radius:50%;background:#21302c;color:#6ee7b7;font:800 9px inherit;font-style:normal}.preflight-check.warning>i{background:#352d1d;color:#fbbf24}.preflight-check.failed>i{background:#3a2025;color:#f87171}.preflight-check strong,.preflight-check small{display:block}.preflight-check strong{margin-bottom:3px;color:#bdc7d5;font-size:8px}.preflight-check small{overflow-wrap:anywhere;color:#657185;font-size:7px;line-height:1.45}@@media(max-width:750px){.preflight-checks{grid-template-columns:1fr}.preflight-panel>header{align-items:flex-start;gap:10px}.preflight-panel>header>button{white-space:nowrap}}
+</style>
+<style>
+    .detail-actions{position:relative;align-self:flex-start;margin-top:29px}.project-actions-menu{position:relative}.project-actions-menu>summary{width:38px;height:36px;display:flex;align-items:center;justify-content:center;gap:3px;border:1px solid #343a50;border-radius:9px;background:#191c2a;cursor:pointer;list-style:none;transition:.18s ease}.project-actions-menu>summary::-webkit-details-marker{display:none}.project-actions-menu>summary:hover,.project-actions-menu[open]>summary{border-color:#6d4bc0;background:#24203a;box-shadow:0 0 0 3px #7c3aed15}.project-actions-menu>summary span{width:3px;height:3px;border-radius:50%;background:#a8b0c0}.project-actions-popover{position:absolute;z-index:20;top:44px;right:0;width:285px;overflow:hidden;padding:7px;border:1px solid #343951;border-radius:12px;background:#171a28;box-shadow:0 18px 50px #05060a99}.actions-menu-head{padding:9px 10px 11px;border-bottom:1px solid #272c3f}.actions-menu-head strong,.actions-menu-head small{display:block}.actions-menu-head strong{color:#e5eaf2;font-size:10px}.actions-menu-head small{margin-top:3px;color:#667286;font-size:8px}.project-actions-popover form{margin:0}.project-actions-popover .menu-action{width:100%;min-height:49px;display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:9px;padding:8px 9px;border:0;border-radius:8px;background:transparent;color:#aeb8c8;text-align:left;text-decoration:none;cursor:pointer;font:inherit}.project-actions-popover .menu-action:hover{background:#202434}.project-actions-popover .menu-action i{width:27px;height:27px;display:grid;place-items:center;border:1px solid #343a50;border-radius:7px;background:#1e2231;color:#9ca8bb;font-size:10px;font-style:normal}.project-actions-popover .menu-action b,.project-actions-popover .menu-action small{display:block}.project-actions-popover .menu-action b{color:#cfd7e3;font-size:9px}.project-actions-popover .menu-action small{margin-top:3px;color:#626e82;font-size:7px}.project-actions-popover .menu-action em{color:#5f6a7d;font-style:normal}.project-actions-popover .menu-action.primary i{border-color:#5d3ba9;background:#3a216c;color:#d8ccff}.project-actions-popover .menu-action.primary b{color:#cbbcff}.project-actions-popover .menu-action.warning i{border-color:#5f3d32;background:#2d211d;color:#f5a67b}.project-actions-popover .menu-action.success-action i{border-color:#215843;background:#153128;color:#6ee7b7}.project-actions-popover .menu-action:disabled{opacity:.4;cursor:not-allowed}.project-actions-popover .menu-action:disabled:hover{background:transparent}@@media(max-width:650px){.detail-actions{position:absolute;top:0;right:0;margin-top:0}.project-actions-popover{position:fixed;top:auto;right:16px;left:16px;width:auto}}
+</style>

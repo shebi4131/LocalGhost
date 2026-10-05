@@ -1,5 +1,5 @@
 <Solution>
-  <Project Path="LocalGhost.Dashboard/LocalGhost.Dashboard.csproj" />
+  <Project Path="LocalGhost.Dashboard/LocalGhost.Dashboard.csproj" Id="81abc6aa-5fc4-4d44-bc11-d7bc85098e06" />
   <Project Path="LocalGhost.Shared/LocalGhost.Shared.csproj" />
   <Project Path="LocalGhost/LocalGhost.csproj" />
 </Solution>

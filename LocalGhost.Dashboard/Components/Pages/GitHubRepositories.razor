@@ -1,0 +1,59 @@
+@page "/github/repositories"
+@attribute [Authorize]
+@inject GitHubCredentialService GitHubCredentials
+
+<PageTitle>Choose a GitHub repository · LocalGhost</PageTitle>
+
+<div class="repo-picker-head">
+    <div><a href="@Target">← Back to project</a><h1>Choose a repository</h1><p>Repositories visible to your connected GitHub account.</p></div>
+    <a class="repo-connect" href="@($"/github/connect?returnTo={Uri.EscapeDataString(Target)}")">⑂ Connect GitHub</a>
+</div>
+
+    @if (!string.IsNullOrWhiteSpace(Error))
+    {
+        <div class="repo-picker-note error"><strong>Connection failed</strong><span>@Error</span></div>
+    }
+    @if (Connected == true && _loadError is null && _repositories.Count > 0)
+    {
+        <div class="repo-picker-note success"><strong>GitHub connected</strong><span>Your repositories are ready to choose.</span></div>
+    }
+    @if (_loadError is not null)
+    {
+        <div class="repo-picker-note error"><strong>Could not load repositories</strong><span>@_loadError</span></div>
+    }
+    else if (_repositories.Count == 0)
+    {
+        <div class="repo-picker-empty"><div>⑂</div><h2>No repositories connected yet</h2><p>Sign in through Git Credential Manager in your browser, then pick any repository this Windows account can access.</p><div><a href="@($"/github/connect?returnTo={Uri.EscapeDataString(Target)}")">Connect GitHub</a></div></div>
+    }
+    else
+    {
+        <div class="repo-picker-toolbar"><span>@_repositories.Count accessible repositories</span><span>Signed in through Git Credential Manager</span></div>
+        <div class="repo-picker-grid">
+            @foreach (var repository in _repositories)
+            {
+                <a class="repo-picker-card" href="@(Target + (Target.Contains('?') ? '&' : '?') + $"repositoryId={repository.Id}")">
+                    <span class="repo-picker-symbol">⑂</span><span class="repo-picker-name"><strong>@repository.Owner/@repository.Name</strong><small>Default branch: @repository.DefaultBranch</small></span><span class="repo-picker-privacy">@(repository.IsPrivate ? "Private" : "Public")</span><b>→</b>
+                </a>
+            }
+        </div>
+    }
+    <div class="repo-picker-footer">Prefer a personal access token? <a href="@Target">Return to project setup</a> and choose PAT fallback.</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "returnTo")] public string? ReturnTo { get; set; }
+    [SupplyParameterFromQuery(Name = "connected")] public bool? Connected { get; set; }
+    [SupplyParameterFromQuery(Name = "error")] public string? Error { get; set; }
+    private List<GitHubRepositoryOption> _repositories = [];
+    private string? _loadError;
+    private string Target => ReturnTo is not null && ReturnTo.StartsWith("/projects/", StringComparison.Ordinal) && !ReturnTo.StartsWith("//", StringComparison.Ordinal) ? ReturnTo : "/projects/new";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try { _repositories = await GitHubCredentials.GetRepositoriesAsync(); }
+        catch (Exception ex) { _loadError = ex.Message; }
+    }
+}
+
+<style>
+    .repo-picker-head{display:flex;align-items:end;justify-content:space-between;gap:20px;margin-bottom:22px}.repo-picker-head a:first-child{color:#a78bfa;text-decoration:none;font-size:10px}.repo-picker-head h1{margin:8px 0 4px;color:#f8fafc;font-size:25px}.repo-picker-head p{margin:0;color:#9aa8bd;font-size:11px}.repo-connect,.repo-picker-empty a:first-child{padding:11px 15px;border-radius:9px;background:linear-gradient(135deg,#7c3aed,#6242c3);color:white!important;text-decoration:none;font-size:11px;font-weight:700}.repo-picker-note{display:flex;gap:12px;margin-bottom:15px;padding:14px 16px;border:1px solid;border-radius:10px;font-size:11px}.repo-picker-note strong{white-space:nowrap}.repo-picker-note.error{border-color:#63303b;background:#291821;color:#fecdd3}.repo-picker-note.success{border-color:#245b49;background:#132d27;color:#a7f3d0}.repo-picker-toolbar{display:flex;justify-content:space-between;margin:20px 0 12px;color:#a8b5c9;font-size:10px}.repo-picker-toolbar a,.repo-picker-footer a{color:#b9a7f4;text-decoration:none}.repo-picker-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.repo-picker-card{display:flex;align-items:center;gap:12px;min-width:0;padding:17px;border:1px solid #2a3045;border-radius:12px;background:#171b2b;text-decoration:none;transition:.15s}.repo-picker-card:hover{border-color:#7c5ac7;background:#201d38;transform:translateY(-2px)}.repo-picker-symbol{display:grid;place-items:center;width:36px;height:36px;border-radius:9px;background:#12303a;color:#67e8f9;font-size:19px}.repo-picker-name{min-width:0;flex:1}.repo-picker-name strong,.repo-picker-name small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.repo-picker-name strong{color:#eef2ff;font-size:12px}.repo-picker-name small{margin-top:4px;color:#9aa8bd;font-size:9px}.repo-picker-privacy{padding:4px 7px;border-radius:7px;background:#252a3a;color:#a8b5c9;font-size:8px}.repo-picker-card b{color:#a78bfa}.repo-picker-empty{padding:70px 20px;border:1px dashed #363650;border-radius:15px;background:#171927;text-align:center}.repo-picker-empty>div:first-child{color:#67e8f9;font-size:42px}.repo-picker-empty h2{color:#eef2ff}.repo-picker-empty p{max-width:430px;margin:0 auto 25px;color:#9aa8bd;line-height:1.6}.repo-picker-empty>div:last-child{display:flex;justify-content:center;gap:12px}.repo-picker-empty a:last-child{padding:11px 15px;border:1px solid #4a3a70;border-radius:9px;color:#c4b5fd;text-decoration:none}.repo-picker-footer{margin-top:20px;color:#8996ab;font-size:10px}@@media(max-width:750px){.repo-picker-grid{grid-template-columns:1fr}.repo-picker-head{align-items:start;flex-direction:column}}
+</style>

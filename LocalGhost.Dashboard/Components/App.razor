@@ -1,0 +1,35 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LocalGhost</title>
+    <base href="/" />
+    <link rel="icon" type="image/png" href="/localghost-logo-transparent.png" />
+    <link rel="stylesheet" href="app.css" />
+    <link rel="stylesheet" href="LocalGhost.Dashboard.styles.css" />
+    <HeadOutlet />
+</head>
+<body>
+    <Routes />
+    <script src="_framework/blazor.web.js"></script>
+    <script src="path-picker.js"></script>
+    <script src="branch-editor.js?v=2"></script>
+    <script src="project-actions.js"></script>
+    <script src="toast-center.js"></script>
+    <script>
+        // Called by Logs.razor to auto-scroll log feed
+        function scrollToBottom(elementId) {
+        const el = document.getElementById(elementId);
+        if (el) el.scrollTop = el.scrollHeight;
+        }
+        function showAuthLoading(form) {
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            button.querySelector('.button-label').hidden = true;
+            button.querySelector('.button-loading').hidden = false;
+            return true;
+        }
+    </script>
+</body>
+</html>

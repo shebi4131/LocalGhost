@@ -1,0 +1,51 @@
+@page "/projects/{ProjectId:guid}/settings"
+@attribute [Authorize]
+@inject AuthenticationStateProvider AuthenticationState
+@inject UserManager<IdentityUser> Users
+@inject ProjectService ProjectsService
+@inject GitHubCredentialService GitHubCredentials
+
+<PageTitle>Project settings · LocalGhost</PageTitle>
+
+@if (_project is null)
+{
+    <div class="page-title">Project not found</div>
+}
+else
+{
+    <div class="form-page-head"><div><a href="/projects/@ProjectId">← @_project.Name</a><h1>Project settings</h1><p>Update this project’s source, build, IIS, and notification configuration.</p></div><span>@_project.Environment</span></div>
+    @if (Saved)
+    {
+        <div class="project-message success" data-global-toast><b>✓</b><div><strong>Settings saved</strong><small>The agent will use this configuration on the next deployment.</small></div></div>
+    }
+    @if (!string.IsNullOrWhiteSpace(Error))
+    {
+        <div class="project-message error" data-global-toast><b>!</b><div><strong>Couldn’t save settings</strong><small>@Error</small></div></div>
+    }
+    <form method="post" action="/projects/@ProjectId/update" onsubmit="return showAuthLoading(this)">
+        <AntiforgeryToken />
+        <ProjectFormFields Model="_project" SelectedRepository="_selectedRepository" />
+        <div class="form-actions"><div><strong>Save project configuration</strong><small>Existing secrets remain unchanged when their fields are left blank.</small></div><a href="/projects/@ProjectId">Cancel</a><button type="submit"><span class="button-label">Save changes</span><span class="button-loading" hidden><i></i> Saving...</span></button></div>
+    </form>
+}
+
+@code {
+    [Parameter] public Guid ProjectId { get; set; }
+    [SupplyParameterFromQuery(Name = "saved")] public bool Saved { get; set; }
+    [SupplyParameterFromQuery(Name = "error")] public string? Error { get; set; }
+    [SupplyParameterFromQuery(Name = "repositoryId")] public long? RepositoryId { get; set; }
+    private ProjectSummary? _project;
+    private GitHubRepositoryOption? _selectedRepository;
+    protected override async Task OnParametersSetAsync()
+    {
+        var ownerId = Users.GetUserId((await AuthenticationState.GetAuthenticationStateAsync()).User);
+        if (ownerId is null) return;
+        _project = await ProjectsService.GetProjectAsync(ownerId, ProjectId);
+        if (RepositoryId is long repository)
+            _selectedRepository = await GitHubCredentials.GetRepositoryAsync(repository);
+    }
+}
+
+<style>
+    .form-page-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:22px}.form-page-head a{display:inline-block;margin-bottom:9px;color:#74669a;text-decoration:none;font-size:9px}.form-page-head h1{margin:0 0 4px;color:#f1f5f9;font-size:21px}.form-page-head p{margin:0;color:#64748b;font-size:9px}.form-page-head>span{padding:4px 8px;border:1px solid #44376d;border-radius:11px;color:#a997df;font-size:7px;text-transform:uppercase}.project-message{display:flex;gap:9px;margin-bottom:15px;padding:10px 12px;border:1px solid;border-radius:9px}.project-message.success{border-color:#17513f;background:#0d2b24;color:#6ee7b7}.project-message.error{border-color:#68262d;background:#2b151a;color:#fca5a5}.project-message strong,.project-message small{display:block}.project-message strong{font-size:9px}.project-message small{margin-top:2px;font-size:8px}.form-actions{display:flex;align-items:center;gap:12px;margin:17px 0;padding:15px 18px;border:1px solid #252a3d;border-radius:12px;background:#171a28}.form-actions>div{flex:1}.form-actions strong,.form-actions small{display:block}.form-actions strong{margin-bottom:3px;color:#cbd5e1;font-size:10px}.form-actions small{color:#515d70;font-size:8px}.form-actions>a{padding:9px 12px;color:#7b8799;text-decoration:none;font-size:9px}.form-actions>button{min-width:125px;min-height:37px;display:grid;place-items:center;border:0;border-radius:8px;background:linear-gradient(135deg,#7c3aed,#6542c1);color:white;cursor:pointer;font-size:10px;font-weight:700}.form-actions>button:disabled{opacity:.75}
+</style>
