@@ -61,5 +61,6 @@ public enum PipelineStage
     Build,
     Deploy,
     Verify,
-    Completed
+    Completed,
+    Migration
 }

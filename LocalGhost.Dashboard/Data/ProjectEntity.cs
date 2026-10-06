@@ -6,12 +6,14 @@ namespace LocalGhost.Dashboard.Data;
 public sealed class ProjectEntity
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid ProjectGroupId { get; set; }
     public ProjectKind Kind { get; set; }
     [MaxLength(450)] public string OwnerUserId { get; set; } = string.Empty;
     [MaxLength(100)] public string Name { get; set; } = string.Empty;
     [MaxLength(500)] public string Description { get; set; } = string.Empty;
     [MaxLength(50)] public string Environment { get; set; } = "Production";
     public bool IsActive { get; set; }
+    public bool RequiresApproval { get; set; }
     public bool IsArchived { get; set; }
     public bool ManualDeployRequested { get; set; }
     public bool IsDeploymentInProgress { get; set; }
@@ -41,6 +43,14 @@ public sealed class ProjectEntity
     public string AppPoolName { get; set; } = string.Empty;
     public string BackupPath { get; set; } = string.Empty;
     public string HealthCheckUrl { get; set; } = string.Empty;
+    public bool MigrationsEnabled { get; set; }
+    public string MigrationProjectPath { get; set; } = string.Empty;
+    public string MigrationStartupProjectPath { get; set; } = string.Empty;
+    public string MigrationDbContextName { get; set; } = string.Empty;
+    public string MigrationConnectionName { get; set; } = "DefaultConnection";
+    public string DatabaseConnectionProtected { get; set; } = string.Empty;
+    public string SqlBackupPath { get; set; } = string.Empty;
+    public int MigrationTimeoutMinutes { get; set; } = 10;
 
     public bool EmailEnabled { get; set; }
     public string SmtpHost { get; set; } = string.Empty;
@@ -52,6 +62,50 @@ public sealed class ProjectEntity
     public bool SmtpEnableSsl { get; set; } = true;
     public bool NotifyOnSuccess { get; set; } = true;
     public bool NotifyOnFailure { get; set; } = true;
+}
+
+public enum ProjectMemberRole { Viewer = 0, Deployer = 1, Manager = 2 }
+
+public sealed class ProjectMemberEntity
+{
+    public Guid ProjectGroupId { get; set; }
+    [MaxLength(450)] public string UserId { get; set; } = string.Empty;
+    public ProjectMemberRole Role { get; set; }
+    public DateTime AddedAt { get; set; } = DateTime.UtcNow;
+}
+
+public sealed class ProjectEnvironmentGrantEntity
+{
+    public Guid ProjectId { get; set; }
+    [MaxLength(450)] public string UserId { get; set; } = string.Empty;
+    public ProjectMemberRole Role { get; set; }
+}
+
+public sealed class ProjectInvitationEntity
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid ProjectGroupId { get; set; }
+    [MaxLength(64)] public string TokenHash { get; set; } = string.Empty;
+    public ProjectMemberRole Role { get; set; }
+    public Guid? EnvironmentId { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime ExpiresAt { get; set; }
+    public DateTime? RedeemedAt { get; set; }
+    [MaxLength(450)] public string? RedeemedByUserId { get; set; }
+}
+
+public sealed class DeploymentApprovalEntity
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid ProjectId { get; set; }
+    [MaxLength(200)] public string Branch { get; set; } = string.Empty;
+    [MaxLength(100)] public string CommitSha { get; set; } = string.Empty;
+    [MaxLength(450)] public string RequestedByUserId { get; set; } = string.Empty;
+    [MaxLength(450)] public string? DecidedByUserId { get; set; }
+    public DateTime RequestedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? DecidedAt { get; set; }
+    public DateTime? ConsumedAt { get; set; }
+    public bool? Approved { get; set; }
 }
 
 public sealed class DeploymentRunEntity

@@ -1,0 +1,38 @@
+@page "/environments"
+@page "/team"
+@attribute [Authorize]
+@inject AuthenticationStateProvider AuthenticationState
+@inject UserManager<IdentityUser> Users
+@inject ProjectService ProjectsService
+
+<PageTitle>Workspaces · LocalGhost</PageTitle>
+
+<div class="workspace-index-head"><span>PROJECT WORKSPACES</span><h1>Environments &amp; team</h1><p>Choose a project to manage its deployment targets, collaborators, and access.</p></div>
+@if (_groups.Count == 0)
+{
+    <div class="workspace-index-empty">No projects yet. <a href="/projects/new">Create a project</a> to set up environments and a team.</div>
+}
+else
+{
+    <div class="workspace-index-grid">
+        @foreach (var group in _groups)
+        {
+            <article><div><span>◆</span><b>@group.First().Name</b></div><p>@group.First().GitHub.RepoOwner/@group.First().GitHub.RepoName</p><small>@group.Count() environment@(group.Count == 1 ? "" : "s") · @string.Join(" · ", group.Select(x => x.Environment))</small><a href="/projects/@group.First().Id/workspace#environments">Manage or remove environments →</a></article>
+        }
+    </div>
+}
+
+@code {
+    private List<List<ProjectSummary>> _groups = [];
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = Users.GetUserId((await AuthenticationState.GetAuthenticationStateAsync()).User);
+        if (userId is null) return;
+        _groups = (await ProjectsService.GetProjectsAsync(userId))
+            .GroupBy(x => x.ProjectGroupId).Select(x => x.OrderBy(y => y.CreatedAt).ToList()).ToList();
+    }
+}
+
+<style>
+    .workspace-index-head{margin-bottom:25px}.workspace-index-head>span{color:#b49af0;font-size:10px;font-weight:800;letter-spacing:1.5px}.workspace-index-head h1{margin:7px 0;color:#eef2f8;font-size:27px}.workspace-index-head p{margin:0;color:#9daaBE;font-size:12px}.workspace-index-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:13px}.workspace-index-grid article{padding:20px;border:1px solid #30364b;border-radius:13px;background:#181c2b}.workspace-index-grid article>div{display:flex;align-items:center;gap:10px;color:#ecf0f7}.workspace-index-grid article>div span{display:grid;place-items:center;width:35px;height:35px;border:1px solid #594779;border-radius:9px;background:#30254c;color:#c7b4f8}.workspace-index-grid article>div b{font-size:14px}.workspace-index-grid article p{margin:15px 0 5px;color:#b1bfd1;font-size:11px}.workspace-index-grid article small{color:#92a1b5;font-size:10px}.workspace-index-grid article a{display:block;margin-top:20px;color:#c4b5fd;text-decoration:none;font-size:11px;font-weight:700}.workspace-index-empty{padding:40px;border:1px solid #30364b;border-radius:13px;background:#181c2b;color:#a9b7c8}.workspace-index-empty a{color:#c4b5fd}
+</style>

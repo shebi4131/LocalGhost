@@ -10,7 +10,8 @@ namespace LocalGhost.Dashboard.Services;
 public sealed class ProjectService(
     IDbContextFactory<ProjectDbContext> dbFactory,
     IDataProtectionProvider dataProtection,
-    GitHubCredentialService githubCredentials)
+    GitHubCredentialService githubCredentials,
+    ProjectAccessService access)
 {
     private readonly IDataProtector _protector = dataProtection.CreateProtector("LocalGhost.ProjectSecrets.v1");
 
@@ -18,7 +19,8 @@ public sealed class ProjectService(
     {
         await using var db = await dbFactory.CreateDbContextAsync();
         var projects = await db.Projects.AsNoTracking()
-            .Where(x => x.OwnerUserId == ownerUserId && !x.IsArchived)
+            .Where(x => !x.IsArchived && (x.OwnerUserId == ownerUserId ||
+                db.ProjectMembers.Any(m => m.ProjectGroupId == x.ProjectGroupId && m.UserId == ownerUserId)))
             .OrderByDescending(x => x.UpdatedAt)
             .ToListAsync();
         var summaries = projects.Select(ToSummary).ToList();
@@ -35,6 +37,7 @@ public sealed class ProjectService(
             summary.SuccessRate = projectRuns.Count == 0 ? 0 : (int)((double)projectRuns.Count(x => x.Status == (int)DeployStatus.Success) / projectRuns.Count * 100);
             var lastSuccess = projectRuns.FirstOrDefault(x => x.Status == (int)DeployStatus.Success);
             summary.LastSuccessfulBranch = lastSuccess?.Branch;
+            summary.LastSuccessfulCommitMessage = lastSuccess?.CommitMessage;
             summary.LastSuccessfulCommittedAt = lastSuccess?.CommittedAt;
             summary.LastSuccessfulDeploymentAt = lastSuccess?.StartedAt;
         }
@@ -45,7 +48,8 @@ public sealed class ProjectService(
     {
         await using var db = await dbFactory.CreateDbContextAsync();
         var project = await db.Projects.AsNoTracking()
-            .FirstOrDefaultAsync(x => x.Id == projectId && x.OwnerUserId == ownerUserId && !x.IsArchived);
+            .FirstOrDefaultAsync(x => x.Id == projectId && !x.IsArchived &&
+                (x.OwnerUserId == ownerUserId || db.ProjectMembers.Any(m => m.ProjectGroupId == x.ProjectGroupId && m.UserId == ownerUserId)));
         return project is null ? null : ToSummary(project);
     }
 
@@ -54,6 +58,7 @@ public sealed class ProjectService(
         await using var db = await dbFactory.CreateDbContextAsync();
         await VerifySourceAsync(ownerUserId, model, null);
         var project = new ProjectEntity { OwnerUserId = ownerUserId };
+        project.ProjectGroupId = project.Id;
         Apply(project, model, isNew: true);
         db.Projects.Add(project);
         await db.SaveChangesAsync();
@@ -62,9 +67,19 @@ public sealed class ProjectService(
 
     public async Task<bool> UpdateAsync(string ownerUserId, Guid projectId, ProjectEditModel model)
     {
+        if (!await access.CanAsync(ownerUserId, projectId, ProjectMemberRole.Manager)) return false;
         await using var db = await dbFactory.CreateDbContextAsync();
-        var project = await db.Projects.FirstOrDefaultAsync(x => x.Id == projectId && x.OwnerUserId == ownerUserId && !x.IsArchived);
+        var project = await db.Projects.FirstOrDefaultAsync(x => x.Id == projectId && !x.IsArchived);
         if (project is null) return false;
+        var otherTargets = await db.Projects.AsNoTracking().Where(x => x.ProjectGroupId == project.ProjectGroupId && x.Id != projectId && !x.IsArchived).ToListAsync();
+        if (otherTargets.Any(x => string.Equals(x.Environment, model.Environment.Trim(), StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("That environment name is already used by this project.");
+        if (otherTargets.Any(x => SamePath(x.SitePath, model.SitePath) || SamePath(x.ReactSitePath, model.SitePath) ||
+            SamePath(x.SitePath, model.ReactSitePath) || SamePath(x.ReactSitePath, model.ReactSitePath)))
+            throw new InvalidOperationException("This IIS destination is already used by another environment in the project.");
+        if (otherTargets.Any(x => SamePath(x.SourceCodePath, model.SourceCodePath) || SamePath(x.ApiOutputPath, model.ApiOutputPath) ||
+            SamePath(x.ReactOutputPath, model.ReactOutputPath)))
+            throw new InvalidOperationException("Source checkout and build output folders must be separate for each environment.");
         await VerifySourceAsync(ownerUserId, model, project);
 
         var oldBranches = ProjectSourceService.ParseBranches(project.Branch);
@@ -127,8 +142,9 @@ public sealed class ProjectService(
 
     public async Task<bool> SetActiveAsync(string ownerUserId, Guid projectId, bool active)
     {
+        if (!await access.CanAsync(ownerUserId, projectId, ProjectMemberRole.Manager)) return false;
         await using var db = await dbFactory.CreateDbContextAsync();
-        var project = await db.Projects.FirstOrDefaultAsync(x => x.Id == projectId && x.OwnerUserId == ownerUserId && !x.IsArchived);
+        var project = await db.Projects.FirstOrDefaultAsync(x => x.Id == projectId && !x.IsArchived);
         if (project is null) return false;
         project.IsActive = active;
         project.UpdatedAt = DateTime.UtcNow;
@@ -138,8 +154,9 @@ public sealed class ProjectService(
 
     public async Task<bool> RequestDeploymentAsync(string ownerUserId, Guid projectId)
     {
+        if (!await access.CanAsync(ownerUserId, projectId, ProjectMemberRole.Deployer)) return false;
         await using var db = await dbFactory.CreateDbContextAsync();
-        var project = await db.Projects.FirstOrDefaultAsync(x => x.Id == projectId && x.OwnerUserId == ownerUserId && !x.IsArchived);
+        var project = await db.Projects.FirstOrDefaultAsync(x => x.Id == projectId && !x.IsArchived);
         if (project is null || !project.IsActive) return false;
         project.ManualDeployRequested = true;
         project.UpdatedAt = DateTime.UtcNow;
@@ -150,7 +167,7 @@ public sealed class ProjectService(
     public async Task<List<DeployRecord>> GetHistoryAsync(string ownerUserId, Guid projectId, int take = 50)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
-        if (!await db.Projects.AnyAsync(x => x.Id == projectId && x.OwnerUserId == ownerUserId && !x.IsArchived)) return [];
+        if (!await access.CanAsync(ownerUserId, projectId, ProjectMemberRole.Viewer)) return [];
         return await db.DeploymentRuns.AsNoTracking().Where(x => x.ProjectId == projectId && !x.IsHidden)
             .OrderByDescending(x => x.StartedAt).Take(take)
             .Select(x => new DeployRecord
@@ -165,7 +182,7 @@ public sealed class ProjectService(
     public async Task<List<LogEntry>> GetLogsAsync(string ownerUserId, Guid projectId, int take = 500)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
-        if (!await db.Projects.AnyAsync(x => x.Id == projectId && x.OwnerUserId == ownerUserId && !x.IsArchived)) return [];
+        if (!await access.CanAsync(ownerUserId, projectId, ProjectMemberRole.Viewer)) return [];
         var items = await db.DeploymentLogs.AsNoTracking().Where(x => x.ProjectId == projectId)
             .OrderByDescending(x => x.Timestamp).Take(take).ToListAsync();
         items.Reverse();
@@ -179,7 +196,7 @@ public sealed class ProjectService(
     public async Task<List<LogEntry>> GetRunLogsAsync(string ownerUserId, Guid projectId, Guid runId)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
-        if (!await db.Projects.AnyAsync(x => x.Id == projectId && x.OwnerUserId == ownerUserId && !x.IsArchived) ||
+        if (!await access.CanAsync(ownerUserId, projectId, ProjectMemberRole.Viewer) ||
             !await db.DeploymentRuns.AnyAsync(x => x.Id == runId && x.ProjectId == projectId && !x.IsHidden)) return [];
         var items = await db.DeploymentLogs.AsNoTracking()
             .Where(x => x.ProjectId == projectId && x.DeployId == runId)
@@ -194,7 +211,7 @@ public sealed class ProjectService(
     public async Task<bool> DeleteRunAsync(string ownerUserId, Guid projectId, Guid runId)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
-        if (!await db.Projects.AnyAsync(x => x.Id == projectId && x.OwnerUserId == ownerUserId && !x.IsArchived)) return false;
+        if (!await access.CanAsync(ownerUserId, projectId, ProjectMemberRole.Manager)) return false;
         var run = await db.DeploymentRuns.FirstOrDefaultAsync(x => x.Id == runId && x.ProjectId == projectId && !x.IsHidden);
         if (run is null || run.Status is (int)DeployStatus.Running or (int)DeployStatus.Queued) return false;
         await db.DeploymentLogs.Where(x => x.ProjectId == projectId && x.DeployId == runId).ExecuteDeleteAsync();
@@ -213,7 +230,9 @@ public sealed class ProjectService(
     {
         await using var db = await dbFactory.CreateDbContextAsync();
         var projectIds = await db.Projects.AsNoTracking()
-            .Where(x => x.OwnerUserId == ownerUserId && !x.IsArchived).Select(x => x.Id).ToListAsync();
+            .Where(x => !x.IsArchived && (x.OwnerUserId == ownerUserId ||
+                db.ProjectMembers.Any(m => m.ProjectGroupId == x.ProjectGroupId && m.UserId == ownerUserId)))
+            .Select(x => x.Id).ToListAsync();
         return await db.DeploymentRuns.AsNoTracking().Where(x => projectIds.Contains(x.ProjectId) && !x.IsHidden)
             .OrderByDescending(x => x.StartedAt).Take(take)
             .Select(x => new DeployRecord
@@ -232,6 +251,7 @@ public sealed class ProjectService(
         target.Description = source.Description.Trim();
         target.Environment = source.Environment.Trim();
         target.IsActive = source.IsActive;
+        target.RequiresApproval = source.RequiresApproval;
         target.PollIntervalSeconds = Math.Clamp(source.PollIntervalSeconds, 10, 3600);
         target.RepoOwner = source.RepoOwner.Trim();
         target.RepoName = source.RepoName.Trim();
@@ -250,6 +270,15 @@ public sealed class ProjectService(
         target.AppPoolName = source.AppPoolName.Trim();
         target.BackupPath = source.BackupPath.Trim();
         target.HealthCheckUrl = source.HealthCheckUrl.Trim();
+        target.MigrationsEnabled = source.MigrationsEnabled;
+        target.MigrationProjectPath = source.MigrationProjectPath.Trim();
+        target.MigrationStartupProjectPath = source.MigrationStartupProjectPath.Trim();
+        target.MigrationDbContextName = source.MigrationDbContextName.Trim();
+        target.MigrationConnectionName = source.MigrationConnectionName.Trim();
+        if (!string.IsNullOrWhiteSpace(source.DatabaseConnectionString))
+            target.DatabaseConnectionProtected = _protector.Protect(source.DatabaseConnectionString.Trim());
+        target.SqlBackupPath = source.SqlBackupPath.Trim();
+        target.MigrationTimeoutMinutes = Math.Clamp(source.MigrationTimeoutMinutes, 1, 120);
         target.EmailEnabled = source.EmailEnabled;
         target.SmtpHost = source.SmtpHost.Trim();
         target.SmtpPort = Math.Clamp(source.SmtpPort, 1, 65535);
@@ -266,18 +295,27 @@ public sealed class ProjectService(
 
     private static ProjectSummary ToSummary(ProjectEntity x) => new()
     {
-        Id = x.Id, Kind = x.Kind, Name = x.Name, Description = x.Description, Environment = x.Environment,
+        Id = x.Id, ProjectGroupId = x.ProjectGroupId, RequiresApproval = x.RequiresApproval,
+        Kind = x.Kind, Name = x.Name, Description = x.Description, Environment = x.Environment,
         IsActive = x.IsActive, ManualDeployRequested = x.ManualDeployRequested,
         IsDeploymentInProgress = x.IsDeploymentInProgress, LastPolledAt = x.LastPolledAt,
         HasGitHubToken = !string.IsNullOrEmpty(x.GitHubTokenProtected), HasSmtpPassword = !string.IsNullOrEmpty(x.SmtpPasswordProtected),
+        HasDatabaseConnection = !string.IsNullOrEmpty(x.DatabaseConnectionProtected),
         GitHubUseCredentialManager = x.GitHubUseCredentialManager, GitHubRepositoryId = x.GitHubRepositoryId,
         CreatedAt = x.CreatedAt, UpdatedAt = x.UpdatedAt, LastSuccessfulCommitSha = x.LastSuccessfulCommitSha,
         PollIntervalSeconds = x.PollIntervalSeconds,
         GitHub = new GitHubSettings { RepoOwner = x.RepoOwner, RepoName = x.RepoName, Branch = x.Branch },
         Build = new BuildSettings { SourceCodePath = x.SourceCodePath, ApiProjectPath = x.ApiProjectPath, ReactProjectPath = x.ReactProjectPath, ApiOutputPath = x.ApiOutputPath, ReactOutputPath = x.ReactOutputPath, TimeoutMinutes = x.BuildTimeoutMinutes },
         IIS = new IISSettings { SitePath = x.SitePath, ReactSitePath = x.ReactSitePath, AppPoolName = x.AppPoolName, BackupPath = x.BackupPath, HealthCheckUrl = x.HealthCheckUrl },
+        Migration = new MigrationSettings { Enabled = x.MigrationsEnabled, ProjectPath = x.MigrationProjectPath,
+            StartupProjectPath = x.MigrationStartupProjectPath, DbContextName = x.MigrationDbContextName,
+            ConnectionName = x.MigrationConnectionName, SqlBackupPath = x.SqlBackupPath, TimeoutMinutes = x.MigrationTimeoutMinutes },
         Smtp = new SmtpSettings { Enabled = x.EmailEnabled, Host = x.SmtpHost, Port = x.SmtpPort, Username = x.SmtpUsername, FromAddress = x.SmtpFromAddress, ToAddress = x.SmtpToAddress, EnableSsl = x.SmtpEnableSsl, NotifyOnSuccess = x.NotifyOnSuccess, NotifyOnFailure = x.NotifyOnFailure }
     };
+
+    private static bool SamePath(string left, string right) =>
+        !string.IsNullOrWhiteSpace(left) && !string.IsNullOrWhiteSpace(right) &&
+        string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
 
     private async Task VerifySourceAsync(string ownerUserId, ProjectEditModel model, ProjectEntity? existing)
     {

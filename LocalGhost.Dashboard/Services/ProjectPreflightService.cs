@@ -12,6 +12,8 @@ namespace LocalGhost.Dashboard.Services;
 public sealed class ProjectPreflightService(
     IDbContextFactory<ProjectDbContext> dbFactory,
     GitHubCredentialService githubCredentials,
+    DeployStateService agentState,
+    IConfiguration configuration,
     ILogger<ProjectPreflightService> logger)
 {
     private readonly ConcurrentDictionary<(string OwnerId, Guid ProjectId), ProjectPreflightReport> _latest = new();
@@ -25,7 +27,8 @@ public sealed class ProjectPreflightService(
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var project = await db.Projects.AsNoTracking()
-            .FirstOrDefaultAsync(x => x.Id == projectId && x.OwnerUserId == ownerId && !x.IsArchived, cancellationToken);
+            .FirstOrDefaultAsync(x => x.Id == projectId && !x.IsArchived &&
+                (x.OwnerUserId == ownerId || db.ProjectMembers.Any(m => m.ProjectGroupId == x.ProjectGroupId && m.UserId == ownerId)), cancellationToken);
         if (project is null) return null;
 
         var checks = new List<PreflightCheck>();
@@ -42,10 +45,29 @@ public sealed class ProjectPreflightService(
         CheckWritableParent("Source checkout", project.SourceCodePath, checks);
         CheckWritableParent(".NET publish output", project.ApiOutputPath, checks);
         if (!string.IsNullOrWhiteSpace(project.ReactProjectPath)) CheckWritableParent("React build output", project.ReactOutputPath, checks);
-        CheckWritableDirectory(project.Kind == ProjectKind.BlazorWebApp ? "IIS Blazor site" : "IIS API site", project.SitePath, checks, mustExist: false);
-        if (!string.IsNullOrWhiteSpace(project.ReactProjectPath)) CheckWritableDirectory("IIS frontend site", project.ReactSitePath, checks, mustExist: false);
-        CheckWritableDirectory("Rollback backup", project.BackupPath, checks, mustExist: false);
-        await CheckAppPoolAsync(project.AppPoolName, checks, cancellationToken);
+        // The Dashboard prepares source/build paths, but the Agent writes IIS and backup paths.
+        // Probing those paths here tests the wrong Windows identity (often a non-admin Dashboard).
+        CheckAgentDirectory(project.Kind == ProjectKind.BlazorWebApp ? "IIS Blazor site" : "IIS API site", project.SitePath, checks);
+        if (!string.IsNullOrWhiteSpace(project.ReactProjectPath)) CheckAgentDirectory("IIS frontend site", project.ReactSitePath, checks);
+        CheckAgentDirectory("Rollback backup", project.BackupPath, checks);
+        if (project.MigrationsEnabled)
+        {
+            checks.Add(string.IsNullOrWhiteSpace(configuration["AgentApiKey"])
+                ? Fail("Agent channel security", "Migrations need a shared AgentApiKey. Set the same non-empty AgentApiKey via configuration or environment variables on both Dashboard and Agent, then restart both services. Do not commit the key to Git.")
+                : Pass("Agent channel security", "Agent API key is configured on the Dashboard."));
+            checks.Add(string.IsNullOrWhiteSpace(project.DatabaseConnectionProtected)
+                ? Fail("Database connection", "No SQL Server deployment connection is stored for this environment.")
+                : Pass("Database connection", "SQL Server deployment connection is stored encrypted."));
+            checks.Add(string.IsNullOrWhiteSpace(project.SqlBackupPath) || !Path.IsPathFullyQualified(project.SqlBackupPath)
+                ? Fail("SQL Server backup", "Set an absolute backup path on the SQL Server machine.")
+                : Pass("SQL Server backup", "Backup location configured; SQL Server write access is tested during deployment."));
+            CheckFile("EF migrations project", project.MigrationProjectPath, checks, sourceIsPresent);
+            checks.Add(AgentToolCheck("EF Core tools", agentState.AgentOnline ? agentState.AgentEfToolsStatus : null,
+                "Install dotnet-ef for the Agent account (or restore it where the Agent runs), then restart the Agent."));
+            checks.Add(AgentToolCheck("SQL Server sqlcmd", agentState.AgentOnline ? agentState.AgentSqlcmdStatus : null,
+                "Install sqlcmd for the Agent account and restart the Agent."));
+        }
+        checks.Add(Warn("IIS application pool", $"The Agent must be able to inspect and restart application pool '{project.AppPoolName}'. Dashboard permissions do not prove Agent permissions."));
         await CheckHealthAsync(project.HealthCheckUrl, checks, cancellationToken);
 
         var report = new ProjectPreflightReport(project.Id, DateTime.UtcNow, checks);
@@ -80,21 +102,6 @@ public sealed class ProjectPreflightService(
     {
         var result = await RunCommandAsync(fileName, arguments, cancellationToken);
         checks.Add(result.Success ? Pass(name, $"Available ({result.Output}).") : Fail(name, result.Output));
-    }
-
-    private static async Task CheckAppPoolAsync(string appPoolName, List<PreflightCheck> checks, CancellationToken cancellationToken)
-    {
-        var appCmd = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "inetsrv", "appcmd.exe");
-        if (!File.Exists(appCmd))
-        {
-            checks.Add(Fail("IIS application pool", "IIS management tools are not installed or appcmd.exe is unavailable."));
-            return;
-        }
-
-        var result = await RunCommandAsync(appCmd, $"list apppool /name:\"{appPoolName.Replace("\"", string.Empty)}\" /text:name", cancellationToken);
-        checks.Add(result.Success && result.Output.Contains(appPoolName, StringComparison.OrdinalIgnoreCase)
-            ? Pass("IIS application pool", $"Application pool '{appPoolName}' exists.")
-            : Fail("IIS application pool", $"Application pool '{appPoolName}' was not found or cannot be inspected. Run LocalGhost with IIS permissions."));
     }
 
     private static async Task CheckHealthAsync(string url, List<PreflightCheck> checks, CancellationToken cancellationToken)
@@ -141,17 +148,20 @@ public sealed class ProjectPreflightService(
         else CheckWrite(name, existing, checks, $"Parent directory is writable and can create {path}.");
     }
 
-    private static void CheckWritableDirectory(string name, string path, List<PreflightCheck> checks, bool mustExist)
+    private static void CheckAgentDirectory(string name, string path, List<PreflightCheck> checks)
     {
-        if (mustExist && !Directory.Exists(path))
-        {
-            checks.Add(Fail(name, $"Directory not found: {path}"));
-            return;
-        }
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
+            checks.Add(Fail(name, "Configure an absolute path on the Agent machine."));
+        else
+            checks.Add(Warn(name, $"Agent must have write access to {path}. Dashboard cannot verify the Agent service account's permissions."));
+    }
 
-        var directory = Directory.Exists(path) ? path : FindExistingDirectory(path);
-        if (directory is null) checks.Add(Fail(name, $"No accessible parent directory exists for {path}"));
-        else CheckWrite(name, directory, checks, Directory.Exists(path) ? $"Directory is writable: {path}" : $"Parent directory is writable and can create {path}.");
+    private static PreflightCheck AgentToolCheck(string name, string? status, string resolution)
+    {
+        if (status is null) return Fail(name, "No recent tool report from the Agent. Start or update the Agent and wait for its next heartbeat.");
+        return status.StartsWith("Available:", StringComparison.OrdinalIgnoreCase)
+            ? Pass(name, $"Agent reports {status}")
+            : Fail(name, $"Agent reports {status} {resolution}");
     }
 
     private static void CheckWrite(string name, string directory, List<PreflightCheck> checks, string successMessage)

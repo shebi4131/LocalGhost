@@ -21,6 +21,8 @@ public sealed class DeployStateService(
     private DateTime? _lastAgentHeartbeat;
     private string _agentVersion = string.Empty;
     private int _agentActiveJobs;
+    private string? _agentEfToolsStatus;
+    private string? _agentSqlcmdStatus;
     public IReadOnlyList<DeployRecord> History { get { lock (_sync) return _history.ToList(); } }
     public IReadOnlyList<LogEntry> CurrentLogs { get { lock (_sync) return _currentLogs.ToList(); } }
     public bool IsDeploying { get { lock (_sync) return _currentByProject.Count > 0; } }
@@ -29,6 +31,8 @@ public sealed class DeployStateService(
     public DateTime? LastAgentHeartbeat { get { lock (_sync) return _lastAgentHeartbeat; } }
     public string AgentVersion { get { lock (_sync) return _agentVersion; } }
     public int AgentActiveJobs { get { lock (_sync) return _agentActiveJobs; } }
+    public string? AgentEfToolsStatus { get { lock (_sync) return _agentEfToolsStatus; } }
+    public string? AgentSqlcmdStatus { get { lock (_sync) return _agentSqlcmdStatus; } }
 
     public void ReportAgentHeartbeat(AgentHeartbeat heartbeat)
     {
@@ -37,6 +41,8 @@ public sealed class DeployStateService(
             _lastAgentHeartbeat = DateTime.UtcNow;
             _agentVersion = heartbeat.Version;
             _agentActiveJobs = heartbeat.ActiveJobs;
+            _agentEfToolsStatus = heartbeat.EfToolsStatus;
+            _agentSqlcmdStatus = heartbeat.SqlcmdStatus;
         }
         NotifyStateChanged();
     }
@@ -61,7 +67,7 @@ public sealed class DeployStateService(
         }
 
         NotifyStateChanged();
-        await hub.Clients.Groups("dashboard", $"project:{record.ProjectId}").SendAsync("DeployStarted", record);
+        await hub.Clients.Group($"project:{record.ProjectId}").SendAsync("DeployStarted", record);
         logger.LogInformation("Deploy started for {Project}: {Sha}", record.ProjectName, record.ShortSha);
     }
 
@@ -86,7 +92,7 @@ public sealed class DeployStateService(
         await db.SaveChangesAsync();
 
         NotifyStateChanged();
-        await hub.Clients.Groups("dashboard", $"project:{entry.ProjectId}").SendAsync("LogReceived", entry);
+        await hub.Clients.Group($"project:{entry.ProjectId}").SendAsync("LogReceived", entry);
     }
 
     public async Task UpdateDeployAsync(DeployRecord record)
@@ -100,7 +106,7 @@ public sealed class DeployStateService(
         }
 
         NotifyStateChanged();
-        await hub.Clients.Groups("dashboard", $"project:{record.ProjectId}").SendAsync("DeployProgress", record);
+        await hub.Clients.Group($"project:{record.ProjectId}").SendAsync("DeployProgress", record);
     }
 
     public async Task FinishDeployAsync(DeployRecord record)
@@ -130,7 +136,7 @@ public sealed class DeployStateService(
         await db.SaveChangesAsync();
 
         NotifyStateChanged();
-        await hub.Clients.Groups("dashboard", $"project:{record.ProjectId}").SendAsync("DeployFinished", record);
+        await hub.Clients.Group($"project:{record.ProjectId}").SendAsync("DeployFinished", record);
         logger.LogInformation("Deploy finished for {Project}: {Sha} — {Status}", record.ProjectName, record.ShortSha, record.Status);
     }
 

@@ -5,6 +5,7 @@ public enum ProjectKind { AspNet = 0, BlazorWebApp = 1 }
 public sealed class ProjectConfiguration
 {
     public Guid Id { get; set; }
+    public Guid ProjectGroupId { get; set; }
     public ProjectKind Kind { get; set; }
     public string Name { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
@@ -16,6 +17,7 @@ public sealed class ProjectConfiguration
     public GitHubSettings GitHub { get; set; } = new();
     public BuildSettings Build { get; set; } = new();
     public IISSettings IIS { get; set; } = new();
+    public MigrationSettings Migration { get; set; } = new();
     public SmtpSettings Smtp { get; set; } = new();
 }
 
@@ -32,6 +34,8 @@ public sealed class AgentHeartbeat
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
     public string Version { get; set; } = string.Empty;
     public int ActiveJobs { get; set; }
+    public string? EfToolsStatus { get; set; }
+    public string? SqlcmdStatus { get; set; }
 }
 
 public sealed class CommitDescriptor
@@ -47,6 +51,8 @@ public sealed class CommitDescriptor
 public sealed class ProjectSummary
 {
     public Guid Id { get; set; }
+    public Guid ProjectGroupId { get; set; }
+    public bool RequiresApproval { get; set; }
     public ProjectKind Kind { get; set; }
     public string Name { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
@@ -56,6 +62,7 @@ public sealed class ProjectSummary
     public bool GitHubUseCredentialManager { get; set; }
     public long? GitHubRepositoryId { get; set; }
     public bool HasSmtpPassword { get; set; }
+    public bool HasDatabaseConnection { get; set; }
     public bool ManualDeployRequested { get; set; }
     public bool IsDeploymentInProgress { get; set; }
     public DateTime? LastPolledAt { get; set; }
@@ -63,6 +70,7 @@ public sealed class ProjectSummary
     public DateTime UpdatedAt { get; set; }
     public string? LastSuccessfulCommitSha { get; set; }
     public string? LastSuccessfulBranch { get; set; }
+    public string? LastSuccessfulCommitMessage { get; set; }
     public DateTime? LastSuccessfulCommittedAt { get; set; }
     public DateTime? LastSuccessfulDeploymentAt { get; set; }
     public DeployStatus? LastDeploymentStatus { get; set; }
@@ -73,5 +81,6 @@ public sealed class ProjectSummary
     public GitHubSettings GitHub { get; set; } = new();
     public BuildSettings Build { get; set; } = new();
     public IISSettings IIS { get; set; } = new();
+    public MigrationSettings Migration { get; set; } = new();
     public SmtpSettings Smtp { get; set; } = new();
 }

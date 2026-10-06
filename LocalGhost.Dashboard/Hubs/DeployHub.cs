@@ -2,14 +2,16 @@
 
 namespace LocalGhost.Dashboard.Hubs;
 
-public class DeployHub : Hub
+[Microsoft.AspNetCore.Authorization.Authorize]
+public class DeployHub(LocalGhost.Dashboard.Services.ProjectAccessService access) : Hub
 {
     public const string Url = "/hubs/deploy";
 
-    // All browser clients join this group on connect
-    public override async Task OnConnectedAsync()
+    public async Task JoinProject(Guid projectId)
     {
-        await Groups.AddToGroupAsync(Context.ConnectionId, "dashboard");
-        await base.OnConnectedAsync();
+        var userId = Context.UserIdentifier;
+        if (userId is null || !await access.CanAsync(userId, projectId, LocalGhost.Dashboard.Data.ProjectMemberRole.Viewer))
+            throw new HubException("Project access denied.");
+        await Groups.AddToGroupAsync(Context.ConnectionId, $"project:{projectId}");
     }
 }

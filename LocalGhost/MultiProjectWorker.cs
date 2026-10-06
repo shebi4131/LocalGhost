@@ -1,12 +1,14 @@
 using LocalGhost.Agent.Services;
 using LocalGhost.Services;
 using LocalGhost.Shared.Models;
+using System.Diagnostics;
 using Models = LocalGhost.Shared.Models;
 
 public sealed class Worker(
     ILogger<Worker> logger,
     IConfiguration configuration,
     BuildRunner buildRunner,
+    MigrationRunner migrationRunner,
     IISDeployer iisDeployer,
     AgentEventSender sender) : BackgroundService
 {
@@ -42,15 +44,46 @@ public sealed class Worker(
 
     private async Task RunHeartbeatAsync(CancellationToken cancellationToken)
     {
+        var efToolsStatus = await ProbeToolAsync("dotnet", ["ef", "--version"], cancellationToken);
+        var sqlcmdStatus = await ProbeToolAsync("sqlcmd", ["-?"], cancellationToken);
         while (!cancellationToken.IsCancellationRequested)
         {
             await sender.SendHeartbeatAsync(new AgentHeartbeat
             {
                 Timestamp = DateTime.UtcNow,
                 Version = typeof(Worker).Assembly.GetName().Version?.ToString() ?? "unknown",
-                ActiveJobs = Volatile.Read(ref _activeJobs)
+                ActiveJobs = Volatile.Read(ref _activeJobs),
+                EfToolsStatus = efToolsStatus,
+                SqlcmdStatus = sqlcmdStatus
             });
             await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
+        }
+    }
+
+    private static async Task<string> ProbeToolAsync(string executable, string[] arguments, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(8));
+            var start = new ProcessStartInfo(executable)
+            {
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true
+            };
+            foreach (var argument in arguments) start.ArgumentList.Add(argument);
+            using var process = Process.Start(start) ?? throw new InvalidOperationException($"Could not start {executable}.");
+            var outputTask = process.StandardOutput.ReadToEndAsync(timeout.Token);
+            var errorTask = process.StandardError.ReadToEndAsync(timeout.Token);
+            await process.WaitForExitAsync(timeout.Token);
+            var output = (await outputTask).Trim();
+            var error = (await errorTask).Trim();
+            if (process.ExitCode != 0) return $"Unavailable: {(string.IsNullOrWhiteSpace(error) ? output : error).Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? $"exit code {process.ExitCode}"}";
+            return $"Available: {output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "ready"}";
+        }
+        catch (Exception ex)
+        {
+            return $"Unavailable: {ex.Message}";
         }
     }
 
@@ -105,6 +138,32 @@ public sealed class Worker(
                 return;
             }
 
+            string? databaseBackupPath = null;
+            if (project.Migration.Enabled)
+            {
+                record.Stage = PipelineStage.Migration;
+                record.StageMessage = "Backing up and migrating SQL Server";
+                await sender.SendProgressAsync(record);
+                var migration = await migrationRunner.RunAsync(project,
+                    line => PushLog(project.Id, record.Id, line, sender,
+                        line.StartsWith("ERR:", StringComparison.OrdinalIgnoreCase) ? Models.LogLevel.Error : Models.LogLevel.Info),
+                    cancellationToken);
+                if (!migration.Success)
+                {
+                    record.Status = DeployStatus.Failed;
+                    record.ErrorMessage = migration.Message;
+                    record.FailedStep = "Migration";
+                    record.StageMessage = "Database migration failed; IIS files unchanged";
+                    record.FinishedAt = DateTime.UtcNow;
+                    record.FullLog = buildResult.FullLog + Environment.NewLine + migration.Message;
+                    await PushLog(project.Id, record.Id, $"✖ {migration.Message}", sender, Models.LogLevel.Error);
+                    await sender.SendFinishAsync(record);
+                    return;
+                }
+                databaseBackupPath = migration.DatabaseBackupPath;
+                await PushLog(project.Id, record.Id, $"✓ {migration.Message}", sender, Models.LogLevel.Success);
+            }
+
             record.Stage = PipelineStage.Deploy;
             record.StageMessage = "Preparing IIS deployment";
             await sender.SendProgressAsync(record);
@@ -122,10 +181,11 @@ public sealed class Worker(
             if (!deployResult.Success)
             {
                 record.Status = DeployStatus.Failed;
-                record.ErrorMessage = deployResult.ErrorMessage;
+                record.ErrorMessage = deployResult.ErrorMessage + (databaseBackupPath is null ? "" :
+                    $" IIS files may be restored, but the database was not rolled back. SQL backup: {databaseBackupPath}");
                 record.FailedStep = "Deploy";
                 record.StageMessage = "Deployment failed";
-                await PushLog(project.Id, record.Id, $"✖ Deploy failed: {deployResult.ErrorMessage}", sender, Models.LogLevel.Error);
+                await PushLog(project.Id, record.Id, $"✖ Deploy failed: {record.ErrorMessage}", sender, Models.LogLevel.Error);
             }
             else
             {

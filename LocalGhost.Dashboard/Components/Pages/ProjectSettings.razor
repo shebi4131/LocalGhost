@@ -3,13 +3,15 @@
 @inject AuthenticationStateProvider AuthenticationState
 @inject UserManager<IdentityUser> Users
 @inject ProjectService ProjectsService
+@inject ProjectAccessService Access
+@using LocalGhost.Dashboard.Data
 @inject GitHubCredentialService GitHubCredentials
 
 <PageTitle>Project settings · LocalGhost</PageTitle>
 
-@if (_project is null)
+@if (_project is null || !_canManage)
 {
-    <div class="page-title">Project not found</div>
+    <div class="page-title">Project settings unavailable</div>
 }
 else
 {
@@ -17,6 +19,10 @@ else
     @if (Saved)
     {
         <div class="project-message success" data-global-toast><b>✓</b><div><strong>Settings saved</strong><small>The agent will use this configuration on the next deployment.</small></div></div>
+    }
+    @if (Created)
+    {
+        <div class="project-message success"><b>◇</b><div><strong>Environment created paused</strong><small>Set a unique IIS destination and database, then activate monitoring when ready.</small></div></div>
     }
     @if (!string.IsNullOrWhiteSpace(Error))
     {
@@ -32,15 +38,18 @@ else
 @code {
     [Parameter] public Guid ProjectId { get; set; }
     [SupplyParameterFromQuery(Name = "saved")] public bool Saved { get; set; }
+    [SupplyParameterFromQuery(Name = "created")] public bool Created { get; set; }
     [SupplyParameterFromQuery(Name = "error")] public string? Error { get; set; }
     [SupplyParameterFromQuery(Name = "repositoryId")] public long? RepositoryId { get; set; }
     private ProjectSummary? _project;
     private GitHubRepositoryOption? _selectedRepository;
+    private bool _canManage;
     protected override async Task OnParametersSetAsync()
     {
         var ownerId = Users.GetUserId((await AuthenticationState.GetAuthenticationStateAsync()).User);
         if (ownerId is null) return;
         _project = await ProjectsService.GetProjectAsync(ownerId, ProjectId);
+        _canManage = await Access.CanAsync(ownerId, ProjectId, ProjectMemberRole.Manager);
         if (RepositoryId is long repository)
             _selectedRepository = await GitHubCredentials.GetRepositoryAsync(repository);
     }

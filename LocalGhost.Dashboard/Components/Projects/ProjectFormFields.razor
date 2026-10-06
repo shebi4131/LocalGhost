@@ -7,7 +7,8 @@
         <a href="#source"><b>02</b><span>Source control<small>GitHub repository</small></span></a>
         <a href="#build"><b>03</b><span>Build pipeline<small>.NET, optional React</small></span></a>
         <a href="#deploy"><b>04</b><span>IIS deployment<small>Targets and rollback</small></span></a>
-        <a href="#notify"><b>05</b><span>Notifications<small>Email delivery</small></span></a>
+        <a href="#migrations"><b>05</b><span>Database migrations<small>SQL Server safety</small></span></a>
+        <a href="#notify"><b>06</b><span>Notifications<small>Email delivery</small></span></a>
         <div class="steps-hint"><span>◆</span><p>Secrets are encrypted before they are stored and are never shown again.</p></div>
     </aside>
 
@@ -17,8 +18,9 @@
             <div class="input-grid">
                 <div class="form-field full"><label>Project name <em>Required</em></label><input name="name" value="@(Model?.Name ?? SelectedRepository?.Name)" placeholder="Customer Portal" maxlength="100" required /><small>Displayed across dashboards, history, and notifications.</small></div>
                 <div class="form-field"><label>Application type <em>Required</em></label><select name="projectKind" onchange="this.closest('.project-form-shell').classList.toggle('is-blazor', this.value === 'BlazorWebApp')"><option value="AspNet" selected="@(Model?.Kind != ProjectKind.BlazorWebApp)">ASP.NET Core API + optional React</option><option value="BlazorWebApp" selected="@(Model?.Kind == ProjectKind.BlazorWebApp)">ASP.NET Core Blazor Web App</option></select><small>Blazor Web App publishes as one IIS site; no separate React build is needed.</small></div>
-                <div class="form-field"><label>Environment</label><select name="environment"><option selected="@(Model?.Environment is null or "Production")">Production</option><option selected="@(Model?.Environment == "Staging")">Staging</option><option selected="@(Model?.Environment == "Development")">Development</option></select><small>Helps distinguish production and non-production targets.</small></div>
+                <div class="form-field"><label>Environment</label><input name="environment" list="environment-names" value="@(Model?.Environment ?? "Production")" maxlength="50" required /><datalist id="environment-names"><option value="Development"></option><option value="Staging"></option><option value="Production"></option></datalist><small>Each environment has a separate pipeline and IIS target.</small></div>
                 <div class="form-field toggle-field"><label class="switch-row"><span><strong>Activate monitoring</strong><small>Start checking GitHub after this project is saved.</small></span><input name="isActive" type="checkbox" checked="@(Model?.IsActive ?? false)" /><i></i></label></div>
+                <div class="form-field toggle-field"><label class="switch-row"><span><strong>Require deployment approval</strong><small>Hold each commit for a project manager before it reaches this environment.</small></span><input name="requiresApproval" type="checkbox" checked="@(Model?.RequiresApproval ?? true)" /><i></i></label></div>
                 <div class="form-field full"><label>Description</label><textarea name="description" rows="3" placeholder="What does this project deploy?">@Model?.Description</textarea></div>
             </div>
         </section>
@@ -66,8 +68,22 @@
             </div>
         </section>
 
+        <section id="migrations" class="form-section">
+            <header><span class="section-icon cyan">▤</span><div><h2>SQL Server migrations</h2><p>Optional EF Core schema changes before IIS deployment.</p></div><b>05</b></header>
+            <label class="enable-card"><span class="section-icon cyan">▤</span><span><strong>Enable EF Core migrations</strong><small>Generates an idempotent SQL script, backs up the database, then applies it. Set the same non-empty AgentApiKey on Dashboard and Agent, and test this environment separately.</small></span><input name="migrationsEnabled" type="checkbox" checked="@(Model?.Migration.Enabled ?? false)" /></label>
+            <div class="input-grid">
+                <div class="form-field full"><label>EF migrations project (.csproj)</label><div class="path-input-row"><input class="mono" name="migrationProjectPath" value="@Model?.Migration.ProjectPath" placeholder="C:\LocalGhost\Source\app\Infrastructure\Infrastructure.csproj" /><button type="button" class="path-pick" data-target="migrationProjectPath" data-mode="csproj" data-title="Select EF migrations project" onclick="chooseLocalPath(this)">Browse</button></div><small>The project containing your committed EF Core migrations; often the API project.</small></div>
+                <div class="form-field full"><label>Startup project (.csproj)</label><div class="path-input-row"><input class="mono" name="migrationStartupProjectPath" value="@Model?.Migration.StartupProjectPath" placeholder="Leave blank to use the migrations project" /><button type="button" class="path-pick" data-target="migrationStartupProjectPath" data-mode="csproj" data-title="Select EF startup project" onclick="chooseLocalPath(this)">Browse</button></div><small>Use the Web API or Blazor startup project if it configures your DbContext.</small></div>
+                <div class="form-field"><label>DbContext class <em>Optional</em></label><input name="migrationDbContextName" value="@Model?.Migration.DbContextName" placeholder="AppDbContext" /><small>Required only when the project contains multiple DbContexts.</small></div>
+                <div class="form-field"><label>App connection name</label><input name="migrationConnectionName" value="@(Model?.Migration.ConnectionName ?? "DefaultConnection")" placeholder="DefaultConnection" /><small>Provided to EF tooling as ConnectionStrings__Name.</small></div>
+                <div class="form-field full"><label>SQL Server connection string <em>@(Model?.HasDatabaseConnection == true ? "Stored — leave blank to keep" : "Required")</em></label><input name="databaseConnectionString" type="password" autocomplete="new-password" placeholder="@(Model?.HasDatabaseConnection == true ? "••••••••  (unchanged)" : "Server=...;Database=...;...")" /><small>Encrypted at rest. Use a deployment identity with backup and schema permissions; the app's runtime identity should be narrower.</small></div>
+                <div class="form-field full"><label>SQL Server backup path</label><div class="path-input-row"><input class="mono" name="sqlBackupPath" value="@Model?.Migration.SqlBackupPath" placeholder="D:\SqlBackups\my-app" /><button type="button" class="path-pick" data-target="sqlBackupPath" data-mode="folder" data-title="Select SQL Server backup folder" onclick="chooseLocalPath(this)"><b>▰</b><span>Browse</span></button></div><small>This folder must exist on the SQL Server machine and be writable by SQL Server. Browse selects a folder on the Dashboard computer; if SQL Server is remote, enter its server-side path manually. It is not the IIS file-backup folder.</small></div>
+                <div class="form-field"><label>Migration timeout (minutes)</label><input name="migrationTimeoutMinutes" type="number" min="1" max="120" value="@(Model?.Migration.TimeoutMinutes ?? 10)" /><small>Stop the run if SQL backup or migration exceeds this time.</small></div>
+            </div>
+        </section>
+
         <section id="notify" class="form-section">
-            <header><span class="section-icon rose">✉</span><div><h2>Email notifications</h2><p>Optional project-specific deployment alerts.</p></div><b>05</b></header>
+            <header><span class="section-icon rose">✉</span><div><h2>Email notifications</h2><p>Optional project-specific deployment alerts.</p></div><b>06</b></header>
             <label class="enable-card"><span class="section-icon rose">✉</span><span><strong>Enable email notifications</strong><small>Send project deployment results through SMTP.</small></span><input name="emailEnabled" type="checkbox" checked="@(Model?.Smtp.Enabled ?? false)" /></label>
             <div class="input-grid three notify-grid">
                 <div class="form-field"><label>SMTP host</label><input name="smtpHost" value="@Model?.Smtp.Host" placeholder="smtp.gmail.com" /></div>

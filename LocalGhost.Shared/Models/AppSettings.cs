@@ -35,6 +35,18 @@ public class IISSettings
     public string HealthCheckUrl { get; set; } = string.Empty;
 }
 
+public class MigrationSettings
+{
+    public bool Enabled { get; set; }
+    public string ProjectPath { get; set; } = string.Empty;
+    public string StartupProjectPath { get; set; } = string.Empty;
+    public string DbContextName { get; set; } = string.Empty;
+    public string ConnectionName { get; set; } = "DefaultConnection";
+    public string ConnectionString { get; set; } = string.Empty;
+    public string SqlBackupPath { get; set; } = string.Empty;
+    public int TimeoutMinutes { get; set; } = 10;
+}
+
 public class SmtpSettings
 {
     public bool Enabled { get; set; }

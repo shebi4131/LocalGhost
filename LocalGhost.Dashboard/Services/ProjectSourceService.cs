@@ -1,5 +1,6 @@
 using LocalGhost.Dashboard.Data;
 using LocalGhost.Shared.Models;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Octokit;
 using System.Collections.Concurrent;
@@ -14,14 +15,17 @@ public sealed class ProjectSourceService(
     DeployStateService state,
     ProjectNotificationService notifications,
     ProjectPreflightService preflight,
+    IDataProtectionProvider dataProtection,
     ILogger<ProjectSourceService> logger)
 {
+    private readonly IDataProtector _protector = dataProtection.CreateProtector("LocalGhost.ProjectSecrets.v1");
     private readonly SemaphoreSlim _claimGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, string> _manualBranches = new();
 
     public void QueueManualBranch(Guid projectId, string? branch)
     {
-        if (!string.IsNullOrWhiteSpace(branch)) _manualBranches[projectId] = branch.Trim();
+        if (string.IsNullOrWhiteSpace(branch)) _manualBranches.TryRemove(projectId, out _);
+        else _manualBranches[projectId] = branch.Trim();
     }
 
     public async Task<List<ProjectDeploymentJob>> ClaimJobsAsync(int maxJobs, CancellationToken cancellationToken)
@@ -48,9 +52,44 @@ public sealed class ProjectSourceService(
             {
                 var token = await githubCredentials.GetProjectTokenAsync(project, cancellationToken);
                 _manualBranches.TryRemove(project.Id, out var requestedBranch);
-                var commit = await GetPendingCommitAsync(project, token, db,
-                    project.ManualDeployRequested, requestedBranch, cancellationToken);
+                var approved = project.RequiresApproval
+                    ? await db.DeploymentApprovals.Where(x => x.ProjectId == project.Id && x.Approved == true && x.ConsumedAt == null)
+                        .OrderBy(x => x.RequestedAt).FirstOrDefaultAsync(cancellationToken)
+                    : null;
+                var commit = approved is null
+                    ? await GetPendingCommitAsync(project, token, db, project.ManualDeployRequested, requestedBranch, cancellationToken)
+                    : await GetCommitAsync(project, token, approved.Branch, approved.CommitSha);
                 if (commit is null) continue;
+                if (project.RequiresApproval && approved is null)
+                {
+                    var prior = await db.DeploymentApprovals.FirstOrDefaultAsync(x =>
+                        x.ProjectId == project.Id && x.Branch == commit.Branch && x.CommitSha == commit.Sha, cancellationToken);
+                    if (project.ManualDeployRequested && prior is { Approved: true })
+                    {
+                        // Approval is tied to this exact SHA. Reuse it only for an explicit retry,
+                        // never for the automatic poll after a failed deployment.
+                        approved = prior;
+                    }
+                    else
+                    {
+                        if (prior is null)
+                            db.DeploymentApprovals.Add(new DeploymentApprovalEntity
+                            {
+                                ProjectId = project.Id, Branch = commit.Branch, CommitSha = commit.Sha,
+                                RequestedByUserId = project.OwnerUserId
+                            });
+                        else if (project.ManualDeployRequested && prior.Approved == false)
+                        {
+                            prior.Approved = null;
+                            prior.DecidedAt = null;
+                            prior.DecidedByUserId = null;
+                            prior.ConsumedAt = null;
+                        }
+                        project.ManualDeployRequested = false;
+                        continue;
+                    }
+                }
+                if (approved is not null) approved.ConsumedAt = now;
 
                 record = new DeployRecord
                 {
@@ -77,11 +116,13 @@ public sealed class ProjectSourceService(
                 }
                 await AddLogAsync(record, $"✓ Preflight passed ({preflightReport.PassedCount} checks, {preflightReport.WarningCount} warnings)", LocalGhost.Shared.Models.LogLevel.Success);
                 await AddLogAsync(record, $"◆ New commit detected on {commit.Branch}: {commit.ShortSha}", LocalGhost.Shared.Models.LogLevel.Success);
+                await AddLogAsync(record, $"Commit message: {commit.Message.Replace('\r', ' ').Replace('\n', ' ')}");
                 await AddLogAsync(record, $"▶ Synchronizing {project.RepoOwner}/{project.RepoName} into {project.SourceCodePath}");
-                var sourceResult = await SyncSourceAsync(project, token, commit.Branch, cancellationToken);
+                var sourceResult = await SyncSourceAsync(project, token, commit.Branch, commit.Sha, cancellationToken);
                 await AddLogAsync(record, $"✓ Source synchronized{(string.IsNullOrWhiteSpace(sourceResult) ? string.Empty : $": {sourceResult}")}", LocalGhost.Shared.Models.LogLevel.Success);
                 project.IsDeploymentInProgress = true;
                 project.AgentLeaseUntil = now.AddMinutes(Math.Max(15, project.BuildTimeoutMinutes + 10));
+                project.ManualDeployRequested = false;
                 jobs.Add(new ProjectDeploymentJob
                 {
                     DeploymentId = record.Id,
@@ -148,13 +189,6 @@ public sealed class ProjectSourceService(
             return await GetLatestCommitAsync(github, project, branch);
         }
 
-        var lastRun = await db.DeploymentRuns.AsNoTracking()
-            .Where(x => x.ProjectId == project.Id)
-            .OrderByDescending(x => x.StartedAt)
-            .FirstOrDefaultAsync(cancellationToken);
-        if (lastRun is not null && lastRun.Status == (int)DeployStatus.Failed &&
-            string.IsNullOrEmpty(lastRun.CommitSha)) return null;
-
         foreach (var branch in branches)
         {
             var commit = await GetLatestCommitAsync(github, project, branch);
@@ -188,7 +222,21 @@ public sealed class ProjectSourceService(
         };
     }
 
-    private async Task<string> SyncSourceAsync(ProjectEntity project, string token, string branch,
+    private static async Task<CommitDescriptor> GetCommitAsync(ProjectEntity project, string token, string branch, string sha)
+    {
+        var github = new GitHubClient(new ProductHeaderValue("LocalGhost-Dashboard"))
+        { Credentials = new Credentials(token) };
+        var item = await github.Repository.Commit.Get(project.RepoOwner, project.RepoName, sha);
+        return new CommitDescriptor
+        {
+            Sha = item.Sha, Branch = branch,
+            Author = item.Commit.Author?.Name ?? item.Author?.Login ?? "Unknown",
+            Message = item.Commit.Message,
+            CommittedAt = item.Commit.Author?.Date.UtcDateTime ?? DateTime.UtcNow
+        };
+    }
+
+    private async Task<string> SyncSourceAsync(ProjectEntity project, string token, string branch, string sha,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(project.SourceCodePath);
@@ -196,9 +244,12 @@ public sealed class ProjectSourceService(
         var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"x-access-token:{token}"));
 
         if (!isRepository)
-            return await RunGitAsync(project.SourceCodePath,
+        {
+            await RunGitAsync(project.SourceCodePath,
                 $"clone --branch {Quote(branch)} --single-branch https://github.com/{project.RepoOwner}/{project.RepoName}.git .",
                 basic, cancellationToken);
+            return await RunGitAsync(project.SourceCodePath, $"checkout --detach {Quote(sha)}", basic, cancellationToken);
+        }
 
         // Old checkouts may have stored a PAT in origin. Keep the remote credential-free;
         // the short-lived credential is supplied only to this Git process.
@@ -207,7 +258,7 @@ public sealed class ProjectSourceService(
             basic, cancellationToken);
         await RunGitAsync(project.SourceCodePath, $"fetch origin {Quote(branch)}", basic, cancellationToken);
         return await RunGitAsync(project.SourceCodePath,
-            $"checkout -B {Quote(branch)} {Quote($"origin/{branch}")}", basic, cancellationToken);
+            $"checkout --detach {Quote(sha)}", basic, cancellationToken);
     }
 
     private async Task<string> RunGitAsync(string workingDirectory, string arguments, string basic,
@@ -251,7 +302,7 @@ public sealed class ProjectSourceService(
             Source = "Dashboard"
         });
 
-    private static ProjectConfiguration ToSafeConfiguration(ProjectEntity x, string branch) => new()
+    private ProjectConfiguration ToSafeConfiguration(ProjectEntity x, string branch) => new()
     {
         Id = x.Id, Kind = x.Kind, Name = x.Name, Description = x.Description, Environment = x.Environment,
         IsActive = x.IsActive, ForceDeploy = x.ManualDeployRequested, LastSuccessfulCommitSha = x.LastSuccessfulCommitSha,
@@ -259,6 +310,10 @@ public sealed class ProjectSourceService(
         GitHub = new GitHubSettings { RepoOwner = x.RepoOwner, RepoName = x.RepoName, Branch = branch },
         Build = new BuildSettings { SourceCodePath = x.SourceCodePath, ApiProjectPath = x.ApiProjectPath, ReactProjectPath = x.ReactProjectPath, ApiOutputPath = x.ApiOutputPath, ReactOutputPath = x.ReactOutputPath, TimeoutMinutes = x.BuildTimeoutMinutes },
         IIS = new IISSettings { SitePath = x.SitePath, ReactSitePath = x.ReactSitePath, AppPoolName = x.AppPoolName, BackupPath = x.BackupPath, HealthCheckUrl = x.HealthCheckUrl },
+        Migration = new MigrationSettings { Enabled = x.MigrationsEnabled, ProjectPath = x.MigrationProjectPath,
+            StartupProjectPath = x.MigrationStartupProjectPath, DbContextName = x.MigrationDbContextName,
+            ConnectionName = x.MigrationConnectionName, SqlBackupPath = x.SqlBackupPath, TimeoutMinutes = x.MigrationTimeoutMinutes,
+            ConnectionString = x.MigrationsEnabled ? _protector.Unprotect(x.DatabaseConnectionProtected) : string.Empty },
         Smtp = new SmtpSettings { Enabled = x.EmailEnabled, Host = x.SmtpHost, Port = x.SmtpPort, Username = x.SmtpUsername, FromAddress = x.SmtpFromAddress, ToAddress = x.SmtpToAddress, EnableSsl = x.SmtpEnableSsl, NotifyOnSuccess = x.NotifyOnSuccess, NotifyOnFailure = x.NotifyOnFailure }
     };
 

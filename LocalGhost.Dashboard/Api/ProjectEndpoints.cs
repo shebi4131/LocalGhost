@@ -1,8 +1,10 @@
 using LocalGhost.Dashboard.Models;
+using LocalGhost.Dashboard.Data;
 using LocalGhost.Dashboard.Services;
 using LocalGhost.Shared.Models;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 
 namespace LocalGhost.Dashboard.Api;
 
@@ -14,6 +16,13 @@ public static class ProjectEndpoints
         app.MapPost("/projects/{projectId:guid}/update", UpdateAsync).RequireAuthorization();
         app.MapPost("/projects/{projectId:guid}/state", SetStateAsync).RequireAuthorization();
         app.MapPost("/projects/{projectId:guid}/deploy", DeployAsync).RequireAuthorization();
+        app.MapPost("/projects/{projectId:guid}/environments", AddEnvironmentAsync).RequireAuthorization();
+        app.MapPost("/projects/{projectId:guid}/environments/{environmentId:guid}/remove", RemoveEnvironmentAsync).RequireAuthorization();
+        app.MapPost("/projects/{projectId:guid}/environments/{environmentId:guid}/restore", RestoreEnvironmentAsync).RequireAuthorization();
+        app.MapPost("/projects/{projectId:guid}/invites", CreateInviteAsync).RequireAuthorization();
+        app.MapPost("/projects/{projectId:guid}/members/remove", RemoveMemberAsync).RequireAuthorization();
+        app.MapPost("/invites/{token}/accept", AcceptInviteAsync).RequireAuthorization();
+        app.MapPost("/approvals/{requestId:guid}/decision", DecideApprovalAsync).RequireAuthorization();
     }
 
     private static async Task<IResult> CreateAsync(HttpContext context, IAntiforgery antiforgery,
@@ -65,12 +74,13 @@ public static class ProjectEndpoints
 
     private static async Task<IResult> DeployAsync(Guid projectId, HttpContext context, IAntiforgery antiforgery,
         UserManager<IdentityUser> users, ProjectService projects, ProjectSourceService source,
-        ProjectPreflightService preflight)
+        ProjectPreflightService preflight, ProjectAccessService access)
     {
         await antiforgery.ValidateRequestAsync(context);
         var form = await context.Request.ReadFormAsync();
         var ownerId = users.GetUserId(context.User);
         if (ownerId is null) return Results.Redirect("/login");
+        if (!await access.CanAsync(ownerId, projectId, ProjectMemberRole.Deployer)) return Results.Forbid();
         var report = await preflight.RunAsync(ownerId, projectId, context.RequestAborted);
         if (report is null) return Results.NotFound();
         if (!report.CanDeploy)
@@ -78,23 +88,145 @@ public static class ProjectEndpoints
             var firstFailure = report.Checks.First(x => x.Status == PreflightCheckStatus.Failed);
             return RedirectError($"/projects/{projectId}", $"Preflight blocked deployment: {firstFailure.Name} — {firstFailure.Detail}");
         }
-        if (!await projects.RequestDeploymentAsync(ownerId, projectId))
-            return RedirectError($"/projects/{projectId}", "Activate the project before requesting a deployment.");
         source.QueueManualBranch(projectId, Text(form, "branch"));
+        if (!await projects.RequestDeploymentAsync(ownerId, projectId))
+        {
+            source.QueueManualBranch(projectId, null);
+            return RedirectError($"/projects/{projectId}", "Activate the project before requesting a deployment.");
+        }
         return Results.Redirect($"/projects/{projectId}?queued=true");
+    }
+
+    private static async Task<IResult> AddEnvironmentAsync(Guid projectId, HttpContext context,
+        IAntiforgery antiforgery, UserManager<IdentityUser> users, ProjectWorkspaceService workspaces)
+    {
+        await antiforgery.ValidateRequestAsync(context);
+        var userId = users.GetUserId(context.User);
+        if (userId is null) return Results.Redirect("/login");
+        var form = await context.Request.ReadFormAsync();
+        try
+        {
+            var id = await workspaces.AddEnvironmentAsync(userId, projectId, Text(form, "environment"));
+            return Results.Redirect($"/projects/{id}/settings?created=true");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException)
+        {
+            return RedirectError($"/projects/{projectId}/workspace", ex.Message);
+        }
+    }
+
+    private static async Task<IResult> CreateInviteAsync(Guid projectId, HttpContext context,
+        IAntiforgery antiforgery, UserManager<IdentityUser> users, ProjectWorkspaceService workspaces)
+    {
+        await antiforgery.ValidateRequestAsync(context);
+        var actor = users.GetUserId(context.User);
+        if (actor is null) return Results.Redirect("/login");
+        var form = await context.Request.ReadFormAsync();
+        if (!Enum.TryParse<ProjectMemberRole>(Text(form, "role"), out var role) || !Enum.IsDefined(role))
+            return RedirectError($"/projects/{projectId}/workspace", "Choose a valid role.");
+        try
+        {
+            var environmentId = Guid.TryParse(Text(form, "environmentId"), out var parsedEnvironment) ? parsedEnvironment : (Guid?)null;
+            var token = await workspaces.CreateInvitationAsync(actor, projectId, role, environmentId);
+            return Results.Redirect($"/projects/{projectId}/workspace?invite={Uri.EscapeDataString(token)}");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException)
+        {
+            return RedirectError($"/projects/{projectId}/workspace", ex.Message);
+        }
+    }
+
+    private static async Task<IResult> RemoveEnvironmentAsync(Guid projectId, Guid environmentId,
+        HttpContext context, IAntiforgery antiforgery, UserManager<IdentityUser> users, ProjectWorkspaceService workspaces)
+    {
+        await antiforgery.ValidateRequestAsync(context);
+        var userId = users.GetUserId(context.User);
+        if (userId is null) return Results.Redirect("/login");
+        try
+        {
+            var remaining = await workspaces.ArchiveEnvironmentAsync(userId, projectId, environmentId);
+            return Results.Redirect($"/projects/{remaining}/workspace?environmentRemoved=true");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException)
+        {
+            return RedirectError($"/projects/{projectId}/workspace", ex.Message);
+        }
+    }
+
+    private static async Task<IResult> RestoreEnvironmentAsync(Guid projectId, Guid environmentId,
+        HttpContext context, IAntiforgery antiforgery, UserManager<IdentityUser> users, ProjectWorkspaceService workspaces)
+    {
+        await antiforgery.ValidateRequestAsync(context);
+        var userId = users.GetUserId(context.User);
+        if (userId is null) return Results.Redirect("/login");
+        try
+        {
+            await workspaces.RestoreEnvironmentAsync(userId, projectId, environmentId);
+            return Results.Redirect($"/projects/{projectId}/workspace?environmentRestored=true");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException)
+        {
+            return RedirectError($"/projects/{projectId}/workspace", ex.Message);
+        }
+    }
+
+    private static async Task<IResult> AcceptInviteAsync(string token, HttpContext context,
+        IAntiforgery antiforgery, UserManager<IdentityUser> users, ProjectWorkspaceService workspaces)
+    {
+        await antiforgery.ValidateRequestAsync(context);
+        var userId = users.GetUserId(context.User);
+        if (userId is null) return Results.Redirect("/login");
+        var projectId = await workspaces.RedeemInvitationAsync(userId, token);
+        return projectId is { } id ? Results.Redirect($"/projects/{id}/workspace?memberAdded=true")
+            : RedirectError($"/invites/{Uri.EscapeDataString(token)}", "This invitation expired or was already used.");
+    }
+
+    private static async Task<IResult> RemoveMemberAsync(Guid projectId, HttpContext context,
+        IAntiforgery antiforgery, UserManager<IdentityUser> users, ProjectWorkspaceService workspaces)
+    {
+        await antiforgery.ValidateRequestAsync(context);
+        var actor = users.GetUserId(context.User);
+        if (actor is null) return Results.Redirect("/login");
+        var form = await context.Request.ReadFormAsync();
+        try
+        {
+            await workspaces.RemoveMemberAsync(actor, projectId, Text(form, "userId"));
+            return Results.Redirect($"/projects/{projectId}/workspace?memberRemoved=true");
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return RedirectError($"/projects/{projectId}/workspace", ex.Message);
+        }
+    }
+
+    private static async Task<IResult> DecideApprovalAsync(Guid requestId, HttpContext context,
+        IAntiforgery antiforgery, UserManager<IdentityUser> users, DeploymentApprovalService approvals)
+    {
+        await antiforgery.ValidateRequestAsync(context);
+        var userId = users.GetUserId(context.User);
+        if (userId is null) return Results.Redirect("/login");
+        var form = await context.Request.ReadFormAsync();
+        var approve = Text(form, "decision") == "approve";
+        if (!await approvals.DecideAsync(userId, requestId, approve)) return Results.NotFound();
+        return Results.Redirect($"/approvals?decided={(approve ? "approved" : "rejected")}");
     }
 
     private static ProjectEditModel FromForm(IFormCollection form) => new()
     {
         Name = Text(form, "name"), Description = Text(form, "description"), Environment = Text(form, "environment"),
         Kind = Enum.TryParse<ProjectKind>(Text(form, "projectKind"), out var kind) && Enum.IsDefined(kind) ? kind : ProjectKind.AspNet,
-        IsActive = Checked(form, "isActive"), PollIntervalSeconds = Number(Text(form, "pollIntervalSeconds"), 30),
+        IsActive = Checked(form, "isActive"), RequiresApproval = Checked(form, "requiresApproval"), PollIntervalSeconds = Number(Text(form, "pollIntervalSeconds"), 30),
         RepoOwner = Text(form, "repoOwner"), RepoName = Text(form, "repoName"), Branch = string.Join(",", new[] { Text(form, "branch"), Text(form, "newBranch") }.Where(value => !string.IsNullOrWhiteSpace(value))), GitHubToken = Text(form, "githubToken"),
         GitHubAuthMode = Text(form, "githubAuthMode"), GitHubRepositoryId = Long(Text(form, "githubRepositoryId")),
         SourceCodePath = Text(form, "sourceCodePath"), ApiProjectPath = Text(form, "apiProjectPath"), ReactProjectPath = Text(form, "reactProjectPath"),
         ApiOutputPath = Text(form, "apiOutputPath"), ReactOutputPath = Text(form, "reactOutputPath"), BuildTimeoutMinutes = Number(Text(form, "buildTimeoutMinutes"), 10),
         SitePath = Text(form, "sitePath"), ReactSitePath = Text(form, "reactSitePath"), AppPoolName = Text(form, "appPoolName"),
         BackupPath = Text(form, "backupPath"), HealthCheckUrl = Text(form, "healthCheckUrl"),
+        MigrationsEnabled = Checked(form, "migrationsEnabled"), MigrationProjectPath = Text(form, "migrationProjectPath"),
+        MigrationStartupProjectPath = Text(form, "migrationStartupProjectPath"),
+        MigrationDbContextName = Text(form, "migrationDbContextName"), MigrationConnectionName = Text(form, "migrationConnectionName"),
+        DatabaseConnectionString = Text(form, "databaseConnectionString"), SqlBackupPath = Text(form, "sqlBackupPath"),
+        MigrationTimeoutMinutes = Number(Text(form, "migrationTimeoutMinutes"), 10),
         EmailEnabled = Checked(form, "emailEnabled"), SmtpHost = Text(form, "smtpHost"), SmtpPort = Number(Text(form, "smtpPort"), 587),
         SmtpUsername = Text(form, "smtpUsername"), SmtpPassword = Text(form, "smtpPassword"), SmtpFromAddress = Text(form, "smtpFromAddress"),
         SmtpToAddress = Text(form, "smtpToAddress"), SmtpEnableSsl = Checked(form, "smtpEnableSsl"),
@@ -117,6 +249,10 @@ public static class ProjectEndpoints
             return "React output and IIS frontend site paths are required when a React project is configured.";
         if (string.IsNullOrWhiteSpace(model.AppPoolName) || string.IsNullOrWhiteSpace(model.BackupPath))
             return "IIS application pool and backup paths are required.";
+        if (model.MigrationsEnabled && (string.IsNullOrWhiteSpace(model.MigrationProjectPath) ||
+            string.IsNullOrWhiteSpace(model.MigrationConnectionName) || string.IsNullOrWhiteSpace(model.SqlBackupPath) ||
+            (requireGitHubToken && string.IsNullOrWhiteSpace(model.DatabaseConnectionString))))
+            return "Enable migrations only after setting its .NET project, connection name, SQL Server backup path, and database connection.";
         if (model.EmailEnabled && (string.IsNullOrWhiteSpace(model.SmtpHost) || string.IsNullOrWhiteSpace(model.SmtpFromAddress) || string.IsNullOrWhiteSpace(model.SmtpToAddress)))
             return "SMTP host, sender, and recipient are required when email notifications are enabled.";
         return null;

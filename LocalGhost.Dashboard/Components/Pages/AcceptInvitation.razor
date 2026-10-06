@@ -1,0 +1,27 @@
+@page "/invites/{Token}"
+@attribute [Authorize]
+@inject ProjectWorkspaceService Workspaces
+
+<PageTitle>Join project · LocalGhost</PageTitle>
+
+<div class="invite-page">
+    @if (_invite is null)
+    {
+        <div class="invite-card"><span>◇</span><h1>Invitation unavailable</h1><p>This link has expired or has already been used. Ask the project owner for a new one.</p><a href="/projects">Your projects →</a></div>
+    }
+    else
+    {
+        <div class="invite-card"><span>◆</span><small>PROJECT INVITATION</small><h1>Join @_invite.ProjectName</h1><p>You’ll join as <strong>@_invite.Role</strong> for <strong>@_invite.Environment</strong>. The project owner can change or remove your access later.</p>@if (!string.IsNullOrWhiteSpace(Error)){<p class="invite-error">@Error</p>}<form method="post" action="/invites/@Token/accept"><AntiforgeryToken /><button type="submit">Accept invitation →</button></form><a href="/projects">Not now</a></div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Token { get; set; } = string.Empty;
+    [SupplyParameterFromQuery(Name = "error")] public string? Error { get; set; }
+    private InvitationView? _invite;
+    protected override async Task OnParametersSetAsync() => _invite = await Workspaces.GetInvitationAsync(Token);
+}
+
+<style>
+    .invite-page{min-height:70vh;display:grid;place-items:center}.invite-card{width:min(100%,430px);padding:35px;border:1px solid #4b416b;border-radius:17px;background:linear-gradient(145deg,#252039,#171b2a);text-align:center}.invite-card>span{display:grid;place-items:center;width:46px;height:46px;margin:0 auto 18px;border:1px solid #63508c;border-radius:13px;background:#34284f;color:#d7c5ff;font-size:23px}.invite-card>small{color:#b59bf4;font-size:10px;font-weight:800;letter-spacing:1.4px}.invite-card h1{margin:10px 0;color:#f4f5fa;font-size:24px}.invite-card p{color:#a8b5c7;font-size:12px;line-height:1.7}.invite-card p strong{color:#d7c7ff}.invite-card p.invite-error{color:#fda4af}.invite-card button{width:100%;margin:20px 0 13px;padding:12px;border:0;border-radius:9px;background:#7048d1;color:white;cursor:pointer;font-size:12px;font-weight:800}.invite-card a{color:#bba7ef;text-decoration:none;font-size:11px}
+</style>

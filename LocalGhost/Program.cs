@@ -6,6 +6,7 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddWindowsService(o => o.ServiceName = "LocalGhost Agent"); // ← uncomment this
 
 builder.Services.AddSingleton<BuildRunner>();
+builder.Services.AddSingleton<MigrationRunner>();
 builder.Services.AddSingleton<IISDeployer>();
 builder.Services.AddSingleton<AgentEventSender>();
 

@@ -9,6 +9,7 @@ public sealed class ProjectEditModel
     public string Description { get; set; } = string.Empty;
     public string Environment { get; set; } = "Production";
     public bool IsActive { get; set; }
+    public bool RequiresApproval { get; set; }
     public int PollIntervalSeconds { get; set; } = 30;
     public string RepoOwner { get; set; } = string.Empty;
     public string RepoName { get; set; } = string.Empty;
@@ -27,6 +28,14 @@ public sealed class ProjectEditModel
     public string AppPoolName { get; set; } = string.Empty;
     public string BackupPath { get; set; } = string.Empty;
     public string HealthCheckUrl { get; set; } = string.Empty;
+    public bool MigrationsEnabled { get; set; }
+    public string MigrationProjectPath { get; set; } = string.Empty;
+    public string MigrationStartupProjectPath { get; set; } = string.Empty;
+    public string MigrationDbContextName { get; set; } = string.Empty;
+    public string MigrationConnectionName { get; set; } = "DefaultConnection";
+    public string DatabaseConnectionString { get; set; } = string.Empty;
+    public string SqlBackupPath { get; set; } = string.Empty;
+    public int MigrationTimeoutMinutes { get; set; } = 10;
     public bool EmailEnabled { get; set; }
     public string SmtpHost { get; set; } = string.Empty;
     public int SmtpPort { get; set; } = 587;

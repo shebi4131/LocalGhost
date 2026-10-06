@@ -17,7 +17,7 @@
             <div class="hero-copy">
                 <span class="hero-eyebrow"><i></i> BUILT FOR YOUR WINDOWS + IIS SERVER</span>
                 <h1>Deploy from GitHub.<br /><em>See every step.</em></h1>
-                <p>LocalGhost watches your chosen branches, builds your app, and deploys it to IIS. One clear place to follow live output, inspect past runs, and manage each project.</p>
+                <p>LocalGhost pairs a background worker service with a detailed web dashboard. The worker watches your chosen branches, builds your app, and deploys it to IIS; the dashboard lets you follow live output, inspect past runs, and manage every project.</p>
                 <div class="hero-actions"><a class="primary-action" href="/register">Create your account <span>→</span></a><a class="secondary-action" href="/login">I already have an account</a></div>
                 <div class="hero-footnote"><span>✦</span> Your projects start in your own workspace. Add a repository when you’re ready.</div>
             </div>
@@ -33,7 +33,7 @@
             </div>
         </section>
 
-        <section class="landing-strip landing-wrap" aria-label="Key capabilities"><span><b>01</b> Project-specific pipelines</span><span><b>02</b> Real-time deployment logs</span><span><b>03</b> Backup &amp; rollback</span><span><b>04</b> Branch monitoring</span></section>
+        <section class="landing-strip landing-wrap" aria-label="Key capabilities"><span><b>01</b> Background worker service</span><span><b>02</b> Detailed live dashboard</span><span><b>03</b> Backup &amp; rollback</span><span><b>04</b> Branch monitoring</span></section>
 
         <section id="how-it-works" class="landing-section landing-wrap">
             <div class="section-intro"><span class="section-kicker">THE WORKFLOW</span><h2>From commit to running site.</h2><p>A practical pipeline that stays visible from source checkout through verification.</p></div>
@@ -52,7 +52,7 @@
                 <article><span class="support-icon cyan">⌘</span><div><h3>ASP.NET Core API</h3><p>Publish a Web API project directly to its IIS site.</p></div><span class="support-tag">.NET</span></article>
                 <article><span class="support-icon amber">✳</span><div><h3>API + React</h3><p>Publish the API and build a separate React frontend for IIS.</p></div><span class="support-tag">.NET + NODE</span></article>
             </div>
-            <p class="support-note">Next.js server and MERN deployments are not supported yet; they need a separate Node runtime workflow.</p>
+            <div class="coming-soon"><div><span class="section-kicker">COMING SOON</span><h3>More ways to deploy.</h3><p>These deployment templates are planned, not available in the current agent.</p></div><div class="coming-soon-list"><span>MERN</span><span>Next.js</span><span>ASP.NET MVC</span><span>ABP.io</span></div></div>
         </section>
 
         <section class="landing-cta landing-wrap"><div><span class="section-kicker">READY WHEN YOU ARE</span><h2>Make your next deployment a clear one.</h2><p>Create an account, add your first project, and keep the full journey in view.</p></div><a class="primary-action" href="/register">Get started <span>→</span></a></section>
@@ -67,4 +67,7 @@
     .brand-mark img { width: 31px; height: 31px; object-fit: contain; }
     .landing-footer span:first-child { display: flex; align-items: center; gap: 6px; }
     .landing-footer span:first-child img { width: 20px; height: 20px; object-fit: contain; }
+    .coming-soon{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-top:22px;padding:23px 26px;border:1px solid #3b3654;border-radius:15px;background:linear-gradient(110deg,#211d34,#171c2b)}
+    .coming-soon h3{margin:7px 0 5px;font-size:17px}.coming-soon p{margin:0;color:#aab5c9;font-size:11px;line-height:1.6}.coming-soon-list{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}.coming-soon-list span{padding:8px 11px;border:1px solid #514772;border-radius:8px;background:#2a2340;color:#d4c4fa;font-size:10px;font-weight:700;white-space:nowrap}
+    @@media(max-width:650px){.coming-soon{align-items:flex-start;flex-direction:column}.coming-soon-list{justify-content:flex-start}}
 </style>

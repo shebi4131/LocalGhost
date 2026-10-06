@@ -4,11 +4,19 @@ using LocalGhost.Dashboard.Data;
 using LocalGhost.Dashboard.Hubs;
 using LocalGhost.Dashboard.Services;
 using LocalGhost.Shared.Models;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddWindowsService(o => o.ServiceName = "LocalGhost Dashboard"); // ← add this
+var keyDirectory = builder.Configuration["DataProtection:KeyDirectory"];
+if (!string.IsNullOrWhiteSpace(keyDirectory))
+{
+    Directory.CreateDirectory(keyDirectory);
+    var keys = builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(keyDirectory));
+    if (OperatingSystem.IsWindows()) keys.ProtectKeysWithDpapi(protectToLocalMachine: true);
+}
 
 // ── Blazor ─────────────────────────────────────────────────────
 builder.Services.AddRazorComponents()
@@ -44,11 +52,16 @@ builder.Services.AddSignalR();
 // ── State service (singleton — shared across all Blazor circuits)
 builder.Services.AddSingleton<DeployStateService>();
 builder.Services.AddSingleton<ProjectService>();
+builder.Services.AddSingleton<ProjectAccessService>();
+builder.Services.AddSingleton<ProjectWorkspaceService>();
+builder.Services.AddSingleton<DeploymentApprovalService>();
 builder.Services.AddSingleton<AgentRequestAuthorizer>();
 builder.Services.AddSingleton<ProjectSourceService>();
 builder.Services.AddSingleton<ProjectNotificationService>();
 builder.Services.AddSingleton<ProjectPreflightService>();
 builder.Services.AddHttpClient<GitHubCredentialService>();
+builder.Services.AddMemoryCache();
+builder.Services.AddHttpClient<ProjectGitHubActivityService>();
 
 var app = builder.Build();
 
@@ -118,11 +131,17 @@ using (var scope = app.Services.CreateScope())
             var hasLocalAuth = false;
             var hasRepository = false;
             var hasKind = false;
+            var hasGroup = false;
+            var hasApproval = false;
+            var existingColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             while (projectReader.Read())
             {
+                existingColumns.Add(projectReader.GetString(1));
                 hasLocalAuth |= string.Equals(projectReader.GetString(1), "GitHubUseCredentialManager", StringComparison.OrdinalIgnoreCase);
                 hasRepository |= string.Equals(projectReader.GetString(1), "GitHubRepositoryId", StringComparison.OrdinalIgnoreCase);
                 hasKind |= string.Equals(projectReader.GetString(1), "Kind", StringComparison.OrdinalIgnoreCase);
+                hasGroup |= string.Equals(projectReader.GetString(1), "ProjectGroupId", StringComparison.OrdinalIgnoreCase);
+                hasApproval |= string.Equals(projectReader.GetString(1), "RequiresApproval", StringComparison.OrdinalIgnoreCase);
             }
             projectReader.Close();
             if (!hasLocalAuth)
@@ -143,6 +162,66 @@ using (var scope = app.Services.CreateScope())
                 alter.CommandText = "ALTER TABLE Projects ADD COLUMN Kind INTEGER NOT NULL DEFAULT 0";
                 alter.ExecuteNonQuery();
             }
+            if (!hasGroup)
+            {
+                using var alter = connection.CreateCommand();
+                alter.CommandText = "ALTER TABLE Projects ADD COLUMN ProjectGroupId TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000'";
+                alter.ExecuteNonQuery();
+            }
+            if (!hasApproval)
+            {
+                using var alter = connection.CreateCommand();
+                alter.CommandText = "ALTER TABLE Projects ADD COLUMN RequiresApproval INTEGER NOT NULL DEFAULT 0";
+                alter.ExecuteNonQuery();
+            }
+            var migrationColumns = new Dictionary<string, string>
+            {
+                ["MigrationsEnabled"] = "INTEGER NOT NULL DEFAULT 0",
+                ["MigrationProjectPath"] = "TEXT NOT NULL DEFAULT ''",
+                ["MigrationStartupProjectPath"] = "TEXT NOT NULL DEFAULT ''",
+                ["MigrationDbContextName"] = "TEXT NOT NULL DEFAULT ''",
+                ["MigrationConnectionName"] = "TEXT NOT NULL DEFAULT 'DefaultConnection'",
+                ["DatabaseConnectionProtected"] = "TEXT NOT NULL DEFAULT ''",
+                ["SqlBackupPath"] = "TEXT NOT NULL DEFAULT ''",
+                ["MigrationTimeoutMinutes"] = "INTEGER NOT NULL DEFAULT 10"
+            };
+            foreach (var (column, definition) in migrationColumns)
+            {
+                if (existingColumns.Contains(column)) continue;
+                using var alter = connection.CreateCommand();
+                alter.CommandText = $"ALTER TABLE Projects ADD COLUMN {column} {definition}";
+                alter.ExecuteNonQuery();
+            }
+        }
+        using (var groups = connection.CreateCommand())
+        {
+            groups.CommandText = "UPDATE Projects SET ProjectGroupId = Id WHERE ProjectGroupId = '00000000-0000-0000-0000-000000000000'";
+            groups.ExecuteNonQuery();
+        }
+        using (var members = connection.CreateCommand())
+        {
+            members.CommandText = "CREATE TABLE IF NOT EXISTS ProjectMembers (ProjectGroupId TEXT NOT NULL, UserId TEXT NOT NULL, Role INTEGER NOT NULL, AddedAt TEXT NOT NULL, PRIMARY KEY (ProjectGroupId, UserId))";
+            members.ExecuteNonQuery();
+        }
+        using (var grants = connection.CreateCommand())
+        {
+            grants.CommandText = "CREATE TABLE IF NOT EXISTS ProjectEnvironmentGrants (ProjectId TEXT NOT NULL, UserId TEXT NOT NULL, Role INTEGER NOT NULL, PRIMARY KEY (ProjectId, UserId))";
+            grants.ExecuteNonQuery();
+        }
+        using (var invites = connection.CreateCommand())
+        {
+            invites.CommandText = "CREATE TABLE IF NOT EXISTS ProjectInvitations (Id TEXT NOT NULL PRIMARY KEY, ProjectGroupId TEXT NOT NULL, TokenHash TEXT NOT NULL, Role INTEGER NOT NULL, EnvironmentId TEXT NULL, CreatedAt TEXT NOT NULL, ExpiresAt TEXT NOT NULL, RedeemedAt TEXT NULL, RedeemedByUserId TEXT NULL)";
+            invites.ExecuteNonQuery();
+        }
+        using (var inviteIndex = connection.CreateCommand())
+        {
+            inviteIndex.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS IX_ProjectInvitations_TokenHash ON ProjectInvitations (TokenHash)";
+            inviteIndex.ExecuteNonQuery();
+        }
+        using (var approvals = connection.CreateCommand())
+        {
+            approvals.CommandText = "CREATE TABLE IF NOT EXISTS DeploymentApprovals (Id TEXT NOT NULL PRIMARY KEY, ProjectId TEXT NOT NULL, Branch TEXT NOT NULL, CommitSha TEXT NOT NULL, RequestedByUserId TEXT NOT NULL, DecidedByUserId TEXT NULL, RequestedAt TEXT NOT NULL, DecidedAt TEXT NULL, ConsumedAt TEXT NULL, Approved INTEGER NULL)";
+            approvals.ExecuteNonQuery();
         }
         connection.Close();
     }

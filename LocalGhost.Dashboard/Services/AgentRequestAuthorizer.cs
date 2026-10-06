@@ -8,6 +8,9 @@ public sealed class AgentRequestAuthorizer(IConfiguration configuration)
 {
     public bool IsAllowed(HttpContext context)
     {
+        if (!context.Request.IsHttps &&
+            (context.Connection.RemoteIpAddress is not { } remote || !IPAddress.IsLoopback(remote)))
+            return false;
         var configured = configuration["AgentApiKey"];
         if (string.IsNullOrWhiteSpace(configured))
             return context.Connection.RemoteIpAddress is { } address && IPAddress.IsLoopback(address);

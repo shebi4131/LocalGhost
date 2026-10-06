@@ -1,0 +1,126 @@
+@page "/source"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject AuthenticationStateProvider AuthenticationState
+@inject UserManager<IdentityUser> Users
+@inject ProjectService Projects
+@inject ProjectGitHubActivityService Activity
+
+<PageTitle>Commits &amp; PRs · LocalGhost</PageTitle>
+
+<div class="source-head"><div><small>GITHUB ACTIVITY</small><h1>Commits &amp; pull requests</h1><p>Follow the code behind your deployment pipelines. This view is read-only; PRs do not trigger a deployment.</p></div></div>
+
+@if (_projects.Count == 0)
+{
+    <div class="source-empty">Add a project to see its GitHub activity. <a href="/projects/new">Create project →</a></div>
+}
+else
+{
+    <nav class="source-projects" aria-label="Choose project">
+        @foreach (var project in _projects)
+        {
+            <a class="@(project.Id == _active?.Id ? "active" : "")" href="/source?project=@project.Id">@project.Name <span>@project.Environment</span></a>
+        }
+    </nav>
+
+    @if (_active is not null)
+    {
+        <div class="source-repo"><span>⑂</span><div><strong>@_active.GitHub.RepoOwner/@_active.GitHub.RepoName</strong><small>Connected through this project's GitHub access</small></div><a href="/projects/@_active.Id">Open pipeline →</a></div>
+        @if (!_configured) { <div class="source-unconfigured">This environment is not fully configured yet. Complete its build and IIS paths to see commits and PRs here.</div> }
+        <div class="source-panels">
+            <section class="source-panel"><header><div><small>VERSION HISTORY</small><h2>Recent commits</h2></div><span>@_commits.Count</span></header>
+                <nav class="source-branches" aria-label="Deployment branches">
+                    @foreach (var branch in _branches)
+                    {
+                        <a class="@(branch == _branch ? "active" : "")" href="/source?project=@_active.Id&amp;branch=@Uri.EscapeDataString(branch)">@branch</a>
+                    }
+                </nav>
+                <p class="source-branch-note">@(_branches.Length == 0 ? "No deployment branch configured" : _branch == _branches[0] ? "Primary branch history" : $"Commits unique to {_branch} compared with {_branches[0]}") · showing up to 100 recent commits</p>
+                @if (_commitError is not null) { <p class="source-error">@_commitError</p> }
+                else if (_commits.Count == 0) { <p class="source-empty">0 commits @(_branch == _branches.FirstOrDefault() ? "found" : "unique to this branch").</p> }
+                else
+                {
+                    <div class="source-list">
+                        @foreach (var commit in PagedCommits)
+                        {
+                            <article><span class="source-mark">●</span><div><a href="@commit.Url" target="_blank" rel="noopener noreferrer">@FirstLine(commit.Message)</a><p>@commit.Author · @(commit.CommittedAt?.ToLocalTime().ToString("dd MMM yyyy, h:mm tt") ?? "Date unavailable")</p></div><code>@ShortSha(commit.Sha)</code></article>
+                        }
+                    </div>
+                    @if (CommitPageCount > 1) { <nav class="source-pager" aria-label="Commit pages"><button type="button" disabled="@(_commitPage == 1)" @onclick="() => ChangeCommitPage(_commitPage - 1)">← Previous</button><span>Page @_commitPage of @CommitPageCount</span><button type="button" disabled="@(_commitPage == CommitPageCount)" @onclick="() => ChangeCommitPage(_commitPage + 1)">Next →</button></nav> }
+                }
+            </section>
+            <section class="source-panel"><header><div><small>CODE REVIEW</small><h2>Recent pull requests</h2></div><span>@_pulls.Count</span></header>
+                @if (_pullError is not null) { <p class="source-error">@_pullError</p> }
+                else if (_pulls.Count == 0) { <p class="source-empty">No pull requests found for this repository.</p> }
+                else
+                {
+                    <div class="source-list">
+                        @foreach (var pull in _pulls)
+                        {
+                            <article><span class="source-mark pull">⑂</span><div><a href="@pull.Url" target="_blank" rel="noopener noreferrer">@pull.Title</a><p>#@pull.Number · @pull.Author · @pull.HeadBranch → @pull.BaseBranch</p><p>Updated @pull.UpdatedAt.ToLocalTime().ToString("dd MMM yyyy, h:mm tt")</p></div><span class="source-pr-state @pull.State.ToLowerInvariant()">@(pull.Draft ? "Draft" : pull.State)</span></article>
+                        }
+                    </div>
+                }
+            </section>
+        </div>
+    }
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "project")] public Guid? ProjectId { get; set; }
+    [SupplyParameterFromQuery(Name = "branch")] public string? Branch { get; set; }
+    private List<ProjectSummary> _projects = [];
+    private ProjectSummary? _active;
+    private string[] _branches = [];
+    private string _branch = "";
+    private List<GitHubCommitView> _commits = [];
+    private List<GitHubPullView> _pulls = [];
+    private bool _configured;
+    private const int CommitsPerPage = 10;
+    private int _commitPage = 1;
+    private int CommitPageCount => Math.Max(1, (int)Math.Ceiling(_commits.Count / (double)CommitsPerPage));
+    private IEnumerable<GitHubCommitView> PagedCommits => _commits.Skip((_commitPage - 1) * CommitsPerPage).Take(CommitsPerPage);
+    private void ChangeCommitPage(int page) => _commitPage = Math.Clamp(page, 1, CommitPageCount);
+    private string? _commitError;
+    private string? _pullError;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var userId = Users.GetUserId((await AuthenticationState.GetAuthenticationStateAsync()).User);
+        if (userId is null) return;
+        _projects = await Projects.GetProjectsAsync(userId);
+        _active = _projects.FirstOrDefault(x => x.Id == ProjectId) ?? _projects.FirstOrDefault();
+        _branches = _active?.GitHub.Branch.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries) ?? [];
+        _branch = _branches.Contains(Branch, StringComparer.OrdinalIgnoreCase) ? Branch! : _branches.FirstOrDefault() ?? "";
+        _commits = [];
+        _pulls = [];
+        _commitPage = 1;
+        _commitError = _pullError = null;
+        if (_active is null) return;
+        _configured = !string.IsNullOrWhiteSpace(_active.IIS.SitePath) && !string.IsNullOrWhiteSpace(_active.IIS.AppPoolName) &&
+            !string.IsNullOrWhiteSpace(_active.IIS.BackupPath) && !string.IsNullOrWhiteSpace(_active.Build.ApiProjectPath) &&
+            !string.IsNullOrWhiteSpace(_active.Build.SourceCodePath);
+        if (!_configured) return;
+        await Task.WhenAll(LoadCommitsAsync(userId, _active.Id), LoadPullsAsync(userId, _active.Id));
+    }
+
+    private async Task LoadCommitsAsync(string userId, Guid projectId)
+    {
+        try { _commits = await Activity.GetCommitsAsync(userId, projectId, _branch); }
+        catch (Exception ex) { _commitError = ex is OperationCanceledException ? "GitHub took too long to respond. Try refreshing." : ex.Message; }
+    }
+
+    private async Task LoadPullsAsync(string userId, Guid projectId)
+    {
+        try { _pulls = await Activity.GetPullRequestsAsync(userId, projectId); }
+        catch (Exception ex) { _pullError = ex is OperationCanceledException ? "GitHub took too long to respond. Try refreshing." : ex.Message; }
+    }
+
+    private static string FirstLine(string message) => message.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "Untitled commit";
+    private static string ShortSha(string sha) => sha[..Math.Min(7, sha.Length)];
+}
+
+<style>
+    .source-unconfigured{margin-bottom:16px;padding:13px 16px;border:1px solid #70543e;border-radius:9px;background:#2c241c;color:#f6d6aa;font-size:11px}.source-branch-note{margin:0;padding:3px 17px 13px;color:#a9b9cf;font-size:10px}.source-pager{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 17px;border-top:1px solid #30384f}.source-pager span{color:#a9b7ca;font-size:10px}.source-pager button{padding:7px 11px;border:1px solid #4a4865;border-radius:7px;background:#242239;color:#d4c7f3;cursor:pointer;font-size:10px}.source-pager button:disabled{opacity:.4;cursor:default}
+    .source-head small,.source-panel header small{color:#bda7fa;font-size:10px;font-weight:800;letter-spacing:1.2px}.source-head h1{margin:7px 0;color:#f3f5fb;font-size:28px}.source-head p{margin:0;color:#acb8c9;font-size:12px}.source-projects{display:flex;gap:8px;overflow-x:auto;margin:24px 0 18px;padding-bottom:4px}.source-projects a,.source-branches a{flex:none;padding:9px 12px;border:1px solid #343a50;border-radius:9px;background:#171c29;color:#c1ccdc;text-decoration:none;font-size:11px}.source-projects a.active,.source-branches a.active{border-color:#8660df;background:#302449;color:#f3eaff}.source-projects span{margin-left:5px;color:#9aa8bc}.source-repo{display:flex;align-items:center;gap:13px;margin-bottom:17px;padding:15px;border:1px solid #303850;border-radius:11px;background:#171c2a}.source-repo>span{color:#56e5d0;font-size:24px}.source-repo div{flex:1;min-width:0}.source-repo strong,.source-repo small{display:block}.source-repo strong{color:#eaf0f9;font-size:13px}.source-repo small{margin-top:3px;color:#aab6c8;font-size:10px}.source-repo a,.source-empty a{color:#c5b0ff;text-decoration:none;font-size:11px}.source-panels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.source-panel{min-width:0;border:1px solid #30384f;border-radius:14px;background:#171b29;overflow:hidden}.source-panel header{display:flex;justify-content:space-between;align-items:center;padding:18px;border-bottom:1px solid #30384f}.source-panel h2{margin:4px 0 0;color:#f1f5fa;font-size:17px}.source-panel header>span{padding:5px 9px;border-radius:18px;background:#263243;color:#b8d0ee;font-size:10px}.source-branches{display:flex;gap:7px;overflow-x:auto;padding:13px 17px}.source-branches a{padding:6px 10px;font-size:10px}.source-list article{display:flex;align-items:start;gap:10px;padding:14px 17px;border-top:1px solid #292f43}.source-mark{color:#52e0ba;font-size:12px}.source-mark.pull{color:#b9a3fa;font-size:18px}.source-list article>div{flex:1;min-width:0}.source-list a{color:#edf2f9;text-decoration:none;font-size:12px;font-weight:650;overflow-wrap:anywhere}.source-list a:hover{color:#c7b7ff}.source-list p{margin:5px 0 0;color:#9dabc0;font-size:10px;overflow-wrap:anywhere}.source-list code{color:#bdadf0;font-size:10px}.source-pr-state{padding:5px 8px;border-radius:20px;background:#213e35;color:#65e7b3;font-size:9px}.source-pr-state.closed{background:#422b33;color:#f4a8b6}.source-pr-state.merged{background:#3b2d58;color:#cab0ff}.source-empty,.source-error{padding:22px;color:#aab7c9;font-size:12px}.source-error{color:#f8a9b5}@@media(max-width:900px){.source-panels{grid-template-columns:1fr}}
+</style>
