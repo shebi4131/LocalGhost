@@ -55,6 +55,7 @@ builder.Services.AddSingleton<ProjectService>();
 builder.Services.AddSingleton<ProjectAccessService>();
 builder.Services.AddSingleton<ProjectWorkspaceService>();
 builder.Services.AddSingleton<DeploymentApprovalService>();
+builder.Services.AddSingleton<UserNotificationService>();
 builder.Services.AddSingleton<AgentRequestAuthorizer>();
 builder.Services.AddSingleton<ProjectSourceService>();
 builder.Services.AddSingleton<ProjectNotificationService>();
@@ -222,6 +223,16 @@ using (var scope = app.Services.CreateScope())
         {
             approvals.CommandText = "CREATE TABLE IF NOT EXISTS DeploymentApprovals (Id TEXT NOT NULL PRIMARY KEY, ProjectId TEXT NOT NULL, Branch TEXT NOT NULL, CommitSha TEXT NOT NULL, RequestedByUserId TEXT NOT NULL, DecidedByUserId TEXT NULL, RequestedAt TEXT NOT NULL, DecidedAt TEXT NULL, ConsumedAt TEXT NULL, Approved INTEGER NULL)";
             approvals.ExecuteNonQuery();
+        }
+        using (var notifications = connection.CreateCommand())
+        {
+            notifications.CommandText = "CREATE TABLE IF NOT EXISTS UserNotifications (Id TEXT NOT NULL PRIMARY KEY, UserId TEXT NOT NULL, ProjectId TEXT NOT NULL, EventKey TEXT NOT NULL, Kind TEXT NOT NULL, Title TEXT NOT NULL, Message TEXT NOT NULL, Url TEXT NOT NULL, CreatedAt TEXT NOT NULL, ReadAt TEXT NULL)";
+            notifications.ExecuteNonQuery();
+        }
+        using (var notificationIndex = connection.CreateCommand())
+        {
+            notificationIndex.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS IX_UserNotifications_UserId_EventKey ON UserNotifications (UserId, EventKey); CREATE INDEX IF NOT EXISTS IX_UserNotifications_UserId_CreatedAt ON UserNotifications (UserId, CreatedAt)";
+            notificationIndex.ExecuteNonQuery();
         }
         connection.Close();
     }

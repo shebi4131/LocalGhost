@@ -5,7 +5,8 @@ namespace LocalGhost.Dashboard.Services;
 
 public sealed class DeploymentApprovalService(
     IDbContextFactory<ProjectDbContext> dbFactory,
-    ProjectAccessService access)
+    ProjectAccessService access,
+    UserNotificationService notifications)
 {
     public async Task<List<ApprovalView>> GetPendingAsync(string userId)
     {
@@ -31,6 +32,10 @@ public sealed class DeploymentApprovalService(
         request.DecidedAt = DateTime.UtcNow;
         if (approve) project.LastPolledAt = null;
         await db.SaveChangesAsync();
+        await notifications.PublishProjectAsync(project.Id, $"approval-decision:{request.Id}",
+            approve ? "approval" : "failure", approve ? "Deployment approved" : "Deployment rejected",
+            $"{project.Name} · {project.Environment} · {request.Branch} · {request.CommitSha[..Math.Min(7, request.CommitSha.Length)]}",
+            $"/projects/{project.Id}");
         return true;
     }
 }

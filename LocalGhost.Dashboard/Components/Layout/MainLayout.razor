@@ -14,37 +14,37 @@
         </div>
 
         <nav class="sidebar-nav">
-            <NavLink class="nav-item" href="/dashboard" Match="NavLinkMatch.All">
+            <NavLink class="nav-item" href="/dashboard" Match="NavLinkMatch.All" title="Dashboard">
                 <span class="nav-icon">⚡</span>
                 <span class="nav-label">Dashboard</span>
             </NavLink>
 
-            <NavLink class="nav-item" href="/projects" Match="NavLinkMatch.Prefix">
+            <NavLink class="nav-item" href="/projects" Match="NavLinkMatch.Prefix" title="Projects">
                 <span class="nav-icon">◆</span>
                 <span class="nav-label">Projects</span>
             </NavLink>
 
-            <NavLink class="nav-item" href="/source">
+            <NavLink class="nav-item" href="/source" title="Commits &amp; PRs">
                 <span class="nav-icon">⑂</span>
                 <span class="nav-label">Commits &amp; PRs</span>
             </NavLink>
 
-            <NavLink class="nav-item" href="/environments">
+            <NavLink class="nav-item" href="/environments" title="Environments">
                 <span class="nav-icon">◈</span>
                 <span class="nav-label">Environments</span>
             </NavLink>
 
-            <NavLink class="nav-item" href="/approvals">
+            <NavLink class="nav-item" href="/approvals" title="Approvals">
                 <span class="nav-icon">✓</span>
                 <span class="nav-label">Approvals</span>
             </NavLink>
 
-            <NavLink class="nav-item" href="/team">
+            <NavLink class="nav-item" href="/team" title="Team access">
                 <span class="nav-icon">♧</span>
                 <span class="nav-label">Team access</span>
             </NavLink>
 
-            <NavLink class="nav-item" href="/profile">
+            <NavLink class="nav-item" href="/profile" title="Profile">
                 <span class="nav-icon">◉</span>
                 <span class="nav-label">Profile</span>
             </NavLink>
@@ -69,6 +69,16 @@
 
     <!-- ── Main content ──────────────────────────────────── -->
     <main class="main-content">
+        <header class="workspace-header">
+            <div class="workspace-header-left">
+                <button id="sidebar-toggle" class="sidebar-toggle" type="button" onclick="localGhostSidebar.toggle()" aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar">
+                    <svg class="collapse-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16m8-11-3 3 3 3"/></svg>
+                    <svg class="expand-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16m5-11 3 3-3 3"/></svg>
+                </button>
+                <span class="workspace-header-title">Workspace</span>
+            </div>
+            <div class="workspace-header-right"><span class="workspace-header-context">LocalGhost CI/CD</span><NotificationBell /></div>
+        </header>
         <div class="content-inner">
             @Body
         </div>
@@ -106,6 +116,7 @@
         border-right: 1px solid #1E2235;
         display: flex;
         flex-direction: column;
+        transition: width .22s ease;
     }
 
     /* Brand */
@@ -207,12 +218,42 @@
     /* ── Main content ────────────────────────────────────── */
     .main-content {
         flex: 1;
+        min-width: 0;
         overflow-y: auto;
         background: #0F1117;
     }
+    .workspace-header {
+        min-height: 58px; padding: 0 32px; display: flex; align-items: center; justify-content: space-between;
+        border-bottom: 1px solid #242a3d; background: #12151f; position: sticky; top: 0; z-index: 20;
+    }
+    .workspace-header-left, .workspace-header-right { display: flex; align-items: center; gap: 14px; }
+    .workspace-header-title { font-size: 13px; font-weight: 700; color: #e7eaf5; letter-spacing: .02em; }
+    .workspace-header-context { font-size: 11px; color: #a6b5ce; border-right: 1px solid #34394d; padding-right: 14px; }
+    .sidebar-toggle, .notification-bell { border: 1px solid transparent; color: #aebcda; background: transparent; border-radius: 10px; min-width: 36px; height: 36px; display: inline-grid; place-items: center; cursor: pointer; }
+    .sidebar-toggle:hover, .notification-bell:hover { color: #f4f0ff; border-color: #43415f; background: #232036; }
+    .expand-icon { display: none; }
+    .shell.sidebar-collapsed .sidebar { width: 68px; }
+    .shell.sidebar-collapsed .brand-text, .shell.sidebar-collapsed .nav-label, .shell.sidebar-collapsed .account-name, .shell.sidebar-collapsed .logout-button { display: none; }
+    .shell.sidebar-collapsed .sidebar-brand { justify-content: center; padding-inline: 10px; }
+    .shell.sidebar-collapsed .sidebar-nav { padding-inline: 7px; }
+    .shell.sidebar-collapsed .nav-item { justify-content: center; padding: 10px; }
+    .shell.sidebar-collapsed .nav-item.active { border-left: 0; padding-left: 10px; box-shadow: inset 3px 0 #7c3aed; }
+    .shell.sidebar-collapsed .sidebar-footer { justify-content: center; padding-inline: 8px; }
+    .shell.sidebar-collapsed .collapse-icon { display: none; }
+    .shell.sidebar-collapsed .expand-icon { display: block; }
+    @@media (max-width: 700px) {
+        .workspace-header { padding-inline: 14px; }
+        .workspace-header-context { display: none; }
+        .content-inner { padding: 20px 16px; }
+        .shell:not(.sidebar-collapsed) .sidebar { width: 180px; }
+        .shell.sidebar-collapsed .sidebar { width: 68px; }
+    }
     .content-inner {
         padding: 28px 32px;
-        max-width: 1200px;
+        width: 100%;
+        max-width: 1800px;
+        min-width: 0;
+        margin-inline: auto;
     }
 
     /* ── Shared card style (used by all pages) ──────────── */

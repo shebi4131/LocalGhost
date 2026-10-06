@@ -12,6 +12,7 @@ public sealed class ProjectDbContext(DbContextOptions<ProjectDbContext> options)
     public DbSet<DeploymentRunEntity> DeploymentRuns => Set<DeploymentRunEntity>();
     public DbSet<ProjectBranchBaselineEntity> ProjectBranchBaselines => Set<ProjectBranchBaselineEntity>();
     public DbSet<DeploymentLogEntity> DeploymentLogs => Set<DeploymentLogEntity>();
+    public DbSet<UserNotificationEntity> UserNotifications => Set<UserNotificationEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -24,5 +25,7 @@ public sealed class ProjectDbContext(DbContextOptions<ProjectDbContext> options)
         modelBuilder.Entity<DeploymentRunEntity>().HasIndex(x => new { x.ProjectId, x.StartedAt });
         modelBuilder.Entity<ProjectBranchBaselineEntity>().HasKey(x => new { x.ProjectId, x.Branch });
         modelBuilder.Entity<DeploymentLogEntity>().HasIndex(x => new { x.ProjectId, x.DeployId, x.Timestamp });
+        modelBuilder.Entity<UserNotificationEntity>().HasIndex(x => new { x.UserId, x.EventKey }).IsUnique();
+        modelBuilder.Entity<UserNotificationEntity>().HasIndex(x => new { x.UserId, x.CreatedAt });
     }
 }

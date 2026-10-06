@@ -1,0 +1,82 @@
+@page "/notifications"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@implements IDisposable
+@inject AuthenticationStateProvider AuthenticationState
+@inject UserNotificationService NotificationsService
+@inject NavigationManager Navigation
+@using LocalGhost.Dashboard.Data
+
+<PageTitle>Notifications · LocalGhost</PageTitle>
+<div class="notifications-page">
+    <div class="notifications-page-head"><div><small>ACTIVITY INBOX</small><h1>Notifications</h1><p>Updates from your projects, all in one place.</p></div><button type="button" disabled="@(_data.Unread == 0)" @onclick="MarkAll">✓ Mark all read</button></div>
+    <div class="notifications-panel">
+    <div class="notifications-tabs"><button class="@(!_unreadOnly ? "selected" : "")" @onclick="() => SetFilter(false)">All</button><button class="@(_unreadOnly ? "selected" : "")" @onclick="() => SetFilter(true)">Unread @if (_data.Unread > 0) { <span>@_data.Unread</span> }</button></div>
+    @if (_data.Items.Count == 0)
+    {
+        <div class="notifications-empty">
+            <span class="notifications-empty-icon"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg></span>
+            <h2>@(_unreadOnly ? "All caught up" : "Nothing here yet")</h2>
+            <p>@(_unreadOnly ? "You have no unread updates right now." : "New commits, approval requests, and deployment results will appear here as they happen.")</p>
+            @if (!_unreadOnly) { <a href="/projects">Explore projects <span>→</span></a> }
+        </div>
+    }
+    else
+    {
+        <div class="notifications-list">
+            @foreach (var item in _data.Items)
+            {
+                <button class="notifications-row @(item.ReadAt is null ? "unread" : "")" @onclick="() => Open(item)">
+                    <span class="notification-kind @item.Kind">@KindIcon(item.Kind)</span>
+                    <span><strong>@item.Title</strong><small>@item.Message</small></span>
+                    <time>@item.CreatedAt.ToLocalTime().ToString("dd MMM yyyy, h:mm tt")</time>
+                    @if (item.ReadAt is null) { <i aria-label="Unread"></i> }
+                </button>
+            }
+        </div>
+        @if (_data.Total > 10)
+        {
+            <div class="notifications-pager"><button disabled="@(_page == 1)" @onclick="() => ChangePage(-1)">← Previous</button><span>Page @_page of @Math.Ceiling(_data.Total / 10d)</span><button disabled="@(_page * 10 >= _data.Total)" @onclick="() => ChangePage(1)">Next →</button></div>
+        }
+    }
+    </div>
+</div>
+
+@code {
+    private string? _userId;
+    private NotificationPage _data = new([], 0, 0, 1);
+    private int _page = 1;
+    private bool _unreadOnly;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _userId = (await AuthenticationState.GetAuthenticationStateAsync()).User
+            .FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        NotificationsService.Created += OnCreated;
+        NotificationsService.Changed += OnChanged;
+        await Reload();
+    }
+    private async Task Reload()
+    {
+        if (_userId is null) return;
+        _data = await NotificationsService.GetPageAsync(_userId, _page, 10, _unreadOnly);
+        _page = _data.Page;
+    }
+    private void OnCreated(string userId, UserNotificationEntity item) => RefreshIfMine(userId);
+    private void OnChanged(string userId) => RefreshIfMine(userId);
+    private void RefreshIfMine(string userId)
+    {
+        if (_userId == userId) _ = InvokeAsync(async () => { await Reload(); StateHasChanged(); });
+    }
+    private async Task SetFilter(bool unreadOnly) { _unreadOnly = unreadOnly; _page = 1; await Reload(); }
+    private async Task ChangePage(int delta) { _page += delta; await Reload(); }
+    private async Task MarkAll() { if (_userId is null) return; await NotificationsService.MarkAllReadAsync(_userId); await Reload(); }
+    private async Task Open(UserNotificationEntity item)
+    {
+        if (_userId is null) return;
+        await NotificationsService.MarkReadAsync(_userId, item.Id);
+        Navigation.NavigateTo(item.Url);
+    }
+    private static string KindIcon(string kind) => kind switch { "approval" => "✓", "success" => "✓", "failure" => "!", "commit" => "⑂", _ => "▶" };
+    public void Dispose() { NotificationsService.Created -= OnCreated; NotificationsService.Changed -= OnChanged; }
+}

@@ -1,0 +1,129 @@
+@rendermode InteractiveServer
+@implements IDisposable
+@inject AuthenticationStateProvider AuthenticationState
+@inject UserNotificationService Notifications
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@using LocalGhost.Dashboard.Data
+
+<div class="notification-center">
+    <button class="notification-bell" type="button" aria-label="Notifications, @_unread unread" aria-expanded="@_open" title="Notifications" @onclick="Toggle">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>
+        @if (_unread > 0) { <span class="notification-count">@(_unread > 99 ? "99+" : _unread.ToString())</span> }
+    </button>
+    @if (_open)
+    {
+        <div class="notification-dismiss-layer" @onclick="Close"></div>
+        <section class="notification-popover" aria-label="Recent notifications">
+            <div class="notification-popover-head"><div><strong>Notifications</strong><small>@(_unread == 0 ? "You're all caught up" : $"{_unread} unread")</small></div><button type="button" class="notification-text-button" disabled="@(_unread == 0)" @onclick="MarkAll">Mark all read</button></div>
+            @if (_items.Count == 0)
+            {
+                <div class="notification-empty">No notifications yet. Deployment updates and approval requests will appear here.</div>
+            }
+            else
+            {
+                <div class="notification-popover-list">
+                    @foreach (var item in _items)
+                    {
+                        <button type="button" class="notification-item @(item.ReadAt is null ? "unread" : "")" @onclick="() => Open(item)">
+                            <span class="notification-kind @item.Kind">@KindIcon(item.Kind)</span>
+                            <span class="notification-copy"><strong>@item.Title</strong><span>@item.Message</span><small>@item.CreatedAt.ToLocalTime().ToString("dd MMM, h:mm tt")</small></span>
+                            @if (item.ReadAt is null) { <span class="notification-unread-dot"></span> }
+                        </button>
+                    }
+                </div>
+            }
+            <button class="notification-all-link" type="button" @onclick="OpenAll">View all notifications <span>→</span></button>
+        </section>
+    }
+</div>
+
+@code {
+    private string? _userId;
+    private int _unread;
+    private List<UserNotificationEntity> _items = [];
+    private bool _open;
+    private bool _ready;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _userId = (await AuthenticationState.GetAuthenticationStateAsync()).User
+            .FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        if (_userId is null) return;
+        Notifications.Created += OnCreated;
+        Notifications.Changed += OnChanged;
+        Navigation.LocationChanged += OnLocationChanged;
+        await Reload();
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender) _ready = true;
+    }
+
+    private async Task Reload()
+    {
+        if (_userId is null) return;
+        var page = await Notifications.GetPageAsync(_userId, 1, 7);
+        _unread = page.Unread;
+        _items = page.Items.ToList();
+    }
+
+    private void OnCreated(string userId, UserNotificationEntity item)
+    {
+        if (userId != _userId) return;
+        _ = InvokeAsync(async () =>
+        {
+            await Reload();
+            StateHasChanged();
+            if (_ready)
+            {
+                try { await JS.InvokeVoidAsync("localGhostToast", item.Title, item.Message,
+                    item.Kind == "failure" ? "error" : "success"); }
+                catch (JSDisconnectedException) { }
+                catch (InvalidOperationException) { }
+            }
+        });
+    }
+
+    private void OnChanged(string userId)
+    {
+        if (userId != _userId) return;
+        _ = InvokeAsync(async () => { await Reload(); StateHasChanged(); });
+    }
+
+    private async Task Toggle()
+    {
+        _open = !_open;
+        if (_open) await Reload();
+    }
+    private void Close() => _open = false;
+    private void OpenAll() { _open = false; Navigation.NavigateTo("/notifications"); }
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs args)
+    {
+        _ = InvokeAsync(() => { _open = false; StateHasChanged(); });
+    }
+    private async Task MarkAll()
+    {
+        if (_userId is null) return;
+        await Notifications.MarkAllReadAsync(_userId);
+        await Reload();
+    }
+    private async Task Open(UserNotificationEntity item)
+    {
+        if (_userId is null) return;
+        await Notifications.MarkReadAsync(_userId, item.Id);
+        _open = false;
+        Navigation.NavigateTo(item.Url);
+    }
+    private static string KindIcon(string kind) => kind switch
+    {
+        "approval" => "✓", "success" => "✓", "failure" => "!", "commit" => "⑂", _ => "▶"
+    };
+    public void Dispose()
+    {
+        Notifications.Created -= OnCreated;
+        Notifications.Changed -= OnChanged;
+        Navigation.LocationChanged -= OnLocationChanged;
+    }
+}

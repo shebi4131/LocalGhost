@@ -9,7 +9,8 @@ namespace LocalGhost.Dashboard.Services;
 public sealed class DeployStateService(
     IHubContext<DeployHub> hub,
     ILogger<DeployStateService> logger,
-    IDbContextFactory<ProjectDbContext> dbFactory)
+    IDbContextFactory<ProjectDbContext> dbFactory,
+    UserNotificationService userNotifications)
 {
     private readonly object _sync = new();
     private readonly Dictionary<Guid, DeployRecord> _currentByProject = new();
@@ -134,6 +135,16 @@ public sealed class DeployStateService(
             if (record.Status == DeployStatus.Success) project.LastSuccessfulCommitSha = record.CommitSha;
         }
         await db.SaveChangesAsync();
+
+        if (record.Status is DeployStatus.Success or DeployStatus.Failed)
+        {
+            var success = record.Status == DeployStatus.Success;
+            await userNotifications.PublishProjectAsync(record.ProjectId, $"run-finish:{record.Id}",
+                success ? "success" : "failure", success ? "Deployment succeeded" : "Deployment failed",
+                $"{record.ProjectName} · {record.Branch} · {record.ShortSha}" +
+                    (success ? string.Empty : $" · {record.FailedStep ?? "Check run output"}"),
+                $"/projects/{record.ProjectId}");
+        }
 
         NotifyStateChanged();
         await hub.Clients.Group($"project:{record.ProjectId}").SendAsync("DeployFinished", record);

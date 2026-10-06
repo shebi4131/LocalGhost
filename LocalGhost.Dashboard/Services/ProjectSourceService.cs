@@ -14,6 +14,7 @@ public sealed class ProjectSourceService(
     GitHubCredentialService githubCredentials,
     DeployStateService state,
     ProjectNotificationService notifications,
+    UserNotificationService userNotifications,
     ProjectPreflightService preflight,
     IDataProtectionProvider dataProtection,
     ILogger<ProjectSourceService> logger)
@@ -44,6 +45,7 @@ public sealed class ProjectSourceService(
             .ToListAsync(cancellationToken);
 
         var jobs = new List<ProjectDeploymentJob>();
+        var pendingAlerts = new List<(Guid ProjectId, string EventKey, string Kind, string Title, string Message, string Url, ProjectMemberRole MinimumRole)>();
         foreach (var project in candidates)
         {
             project.LastPolledAt = now;
@@ -60,6 +62,15 @@ public sealed class ProjectSourceService(
                     ? await GetPendingCommitAsync(project, token, db, project.ManualDeployRequested, requestedBranch, cancellationToken)
                     : await GetCommitAsync(project, token, approved.Branch, approved.CommitSha);
                 if (commit is null) continue;
+                if (!project.ManualDeployRequested && approved is null)
+                {
+                    var headline = commit.Message.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                        .FirstOrDefault()?.Trim() ?? string.Empty;
+                    if (headline.Length > 120) headline = headline[..120] + "…";
+                    pendingAlerts.Add((project.Id, $"commit:{project.Id}:{commit.Branch}:{commit.Sha}", "commit",
+                        $"New commit on {commit.Branch}", $"{project.Name} · {commit.ShortSha} · {headline}",
+                        $"/projects/{project.Id}", ProjectMemberRole.Viewer));
+                }
                 if (project.RequiresApproval && approved is null)
                 {
                     var prior = await db.DeploymentApprovals.FirstOrDefaultAsync(x =>
@@ -73,11 +84,17 @@ public sealed class ProjectSourceService(
                     else
                     {
                         if (prior is null)
-                            db.DeploymentApprovals.Add(new DeploymentApprovalEntity
+                        {
+                            var request = new DeploymentApprovalEntity
                             {
                                 ProjectId = project.Id, Branch = commit.Branch, CommitSha = commit.Sha,
                                 RequestedByUserId = project.OwnerUserId
-                            });
+                            };
+                            db.DeploymentApprovals.Add(request);
+                            pendingAlerts.Add((project.Id, $"approval:{request.Id}", "approval", "Approval needed",
+                                $"{project.Name} · {project.Environment} · {commit.Branch} · {commit.ShortSha}",
+                                "/approvals", ProjectMemberRole.Manager));
+                        }
                         else if (project.ManualDeployRequested && prior.Approved == false)
                         {
                             prior.Approved = null;
@@ -106,6 +123,8 @@ public sealed class ProjectSourceService(
                     StartedAt = DateTime.UtcNow
                 };
                 await state.StartDeployAsync(record);
+                await userNotifications.PublishProjectAsync(project.Id, $"run-start:{record.Id}", "running",
+                    "Deployment started", $"{project.Name} · {commit.Branch} · {commit.ShortSha}", $"/projects/{project.Id}");
                 var preflightReport = await preflight.RunAsync(project.OwnerUserId, project.Id, cancellationToken);
                 if (preflightReport is null || !preflightReport.CanDeploy)
                 {
@@ -164,6 +183,9 @@ public sealed class ProjectSourceService(
         }
 
         await db.SaveChangesAsync(cancellationToken);
+        foreach (var alert in pendingAlerts)
+            await userNotifications.PublishProjectAsync(alert.ProjectId, alert.EventKey, alert.Kind,
+                alert.Title, alert.Message, alert.Url, alert.MinimumRole);
         return jobs;
         }
         finally

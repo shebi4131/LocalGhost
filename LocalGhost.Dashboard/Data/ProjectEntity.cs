@@ -144,3 +144,17 @@ public sealed class DeploymentLogEntity
     public int Level { get; set; }
     public string Source { get; set; } = string.Empty;
 }
+
+public sealed class UserNotificationEntity
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    [MaxLength(450)] public string UserId { get; set; } = string.Empty;
+    public Guid ProjectId { get; set; }
+    [MaxLength(160)] public string EventKey { get; set; } = string.Empty;
+    [MaxLength(32)] public string Kind { get; set; } = string.Empty;
+    [MaxLength(160)] public string Title { get; set; } = string.Empty;
+    [MaxLength(500)] public string Message { get; set; } = string.Empty;
+    [MaxLength(500)] public string Url { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? ReadAt { get; set; }
+}
